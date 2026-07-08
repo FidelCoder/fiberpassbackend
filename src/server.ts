@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import { ZodError } from 'zod';
 import { env } from './config/env.js';
 import { ApiError } from './lib/errors.js';
+import { appsRouter } from './routes/apps.routes.js';
 import { authRouter } from './routes/auth.routes.js';
 import { demoRouter } from './routes/demo.routes.js';
 import { sessionsRouter } from './routes/sessions.routes.js';
@@ -29,6 +30,7 @@ app.get('/health', (_request, response) => {
 });
 
 app.use(authRouter);
+app.use(appsRouter);
 app.use(sessionsRouter);
 app.use(demoRouter);
 

@@ -3,6 +3,7 @@ import { FilterQuery } from 'mongoose';
 import { seedSessions } from '../data/seed.js';
 import { ApiError } from '../lib/errors.js';
 import { liveEvents } from '../lib/liveEvents.js';
+import { ChargeAttemptModel, type ChargeAttemptRecord } from '../models/chargeAttempt.model.js';
 import { roundMoney, utcTimeLabel } from '../lib/time.js';
 import { ICON_TYPES, SessionModel, type IconType, type SessionRecord, type SessionStatus } from '../models/session.model.js';
 import { WalletModel, type WalletRecord } from '../models/wallet.model.js';
@@ -88,6 +89,24 @@ interface TransactionLogDto {
   amount: number;
 }
 
+export interface ChargeAttemptDto {
+  id: string;
+  sessionId: string;
+  appId?: string;
+  apiKeyId?: string;
+  amount: number;
+  currency: string;
+  type: string;
+  status: string;
+  failureCode?: string;
+  failureMessage?: string;
+  resultingSpent?: number;
+  remainingBalance?: number;
+  createdAt: string;
+}
+
+type ChargeAttemptLike = Omit<ChargeAttemptRecord, 'createdAt'> & { createdAt?: Date };
+
 interface SessionLike {
   ownerWalletId: string;
   publicId: string;
@@ -138,6 +157,7 @@ export interface SessionDto {
   autoMicroCharges: boolean;
   singleUse: boolean;
   logs: TransactionLogDto[];
+  chargeAttempts: ChargeAttemptDto[];
 }
 
 export interface WalletDto {
@@ -177,6 +197,10 @@ export interface ChargeSessionInput {
   sessionId: string;
   amount: number;
   type: string;
+  appId?: string;
+  apiKeyId?: string;
+  appServiceAddress?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface CreateSessionPolicyDto {
@@ -224,7 +248,25 @@ function prependLogs(
   session.set('logs', [...logs, ...existingLogs]);
 }
 
-function toSessionDto(session: SessionLike): SessionDto {
+function toChargeAttemptDto(attempt: ChargeAttemptLike): ChargeAttemptDto {
+  return {
+    id: attempt.attemptId,
+    sessionId: attempt.sessionId,
+    appId: attempt.appId ?? undefined,
+    apiKeyId: attempt.apiKeyId ?? undefined,
+    amount: roundMoney(attempt.amount),
+    currency: attempt.currency,
+    type: attempt.type,
+    status: attempt.status,
+    failureCode: attempt.failureCode ?? undefined,
+    failureMessage: attempt.failureMessage ?? undefined,
+    resultingSpent: attempt.resultingSpent == null ? undefined : roundMoney(attempt.resultingSpent),
+    remainingBalance: attempt.remainingBalance == null ? undefined : roundMoney(attempt.remainingBalance),
+    createdAt: (attempt.createdAt ?? new Date()).toISOString()
+  };
+}
+
+function toSessionDto(session: SessionLike, chargeAttempts: ChargeAttemptDto[] = []): SessionDto {
   return {
     id: session.publicId,
     name: session.name,
@@ -247,7 +289,8 @@ function toSessionDto(session: SessionLike): SessionDto {
     expiryTime: session.expiryTime,
     autoMicroCharges: session.autoMicroCharges,
     singleUse: session.singleUse,
-    logs: session.logs ?? []
+    logs: session.logs ?? [],
+    chargeAttempts
   };
 }
 
@@ -412,7 +455,20 @@ export async function getSessionsOverview(walletId: string): Promise<SessionsOve
     SessionModel.find({ ownerWalletId: walletId }).sort({ createdAt: -1 }).lean<SessionLike[]>()
   ]);
 
-  const sessionDtos = sessions.map(toSessionDto);
+  const sessionIds = sessions.map((session) => session.publicId);
+  const attempts = sessionIds.length === 0
+    ? []
+    : await ChargeAttemptModel.find({ sessionId: { $in: sessionIds } }).sort({ createdAt: -1 }).limit(200).lean<ChargeAttemptLike[]>();
+  const attemptsBySession = new Map<string, ChargeAttemptDto[]>();
+  for (const attempt of attempts) {
+    const existing = attemptsBySession.get(attempt.sessionId) ?? [];
+    if (existing.length < 20) {
+      existing.push(toChargeAttemptDto(attempt));
+      attemptsBySession.set(attempt.sessionId, existing);
+    }
+  }
+
+  const sessionDtos = sessions.map((session) => toSessionDto(session, attemptsBySession.get(session.publicId) ?? []));
   return {
     wallet: toWalletDto(wallet.toObject()),
     activeSessions: sessionDtos.filter((session) => OPEN_STATUSES.includes(session.status)),
@@ -569,59 +625,120 @@ export async function settleSession(publicId: string, walletId: string): Promise
   return overview;
 }
 
+function normalizedAddress(value?: string): string {
+  return (value ?? '').trim().toLowerCase();
+}
+
+function failureFromError(error: unknown): { code: string; message: string } {
+  if (error instanceof ApiError) {
+    return { code: error.code, message: error.message };
+  }
+  if (error instanceof Error) {
+    return { code: 'CHARGE_FAILED', message: error.message };
+  }
+  return { code: 'CHARGE_FAILED', message: 'Charge attempt failed.' };
+}
+
 export async function chargeSession(input: ChargeSessionInput): Promise<SessionsOverviewDto> {
   const amount = roundMoney(input.amount);
-  if (amount <= 0) {
-    throw new ApiError(400, 'INVALID_CHARGE_AMOUNT', 'Charge amount must be greater than zero.');
-  }
-
-  const session = await getSessionOrThrow(input.sessionId);
-  const ownerWalletId = session.ownerWalletId as string;
-
-  if (session.status !== 'active') {
-    throw new ApiError(409, 'SESSION_NOT_CHARGEABLE', `Session is ${session.status}; charges are blocked.`);
-  }
-
-  const remaining = roundMoney(session.limit - session.spent);
-  if (amount > remaining) {
-    session.status = 'expired';
-    session.expiryTime = 'Limit Exhausted';
-    prependLogs(session, newLog('Charge Blocked - Spending Limit Exhausted'));
-    await session.save();
-    await fiberAdapter.settleSession({ sessionId: input.sessionId, amount: 0, currency: session.currency, reason: 'expired' });
-    await publishOverview(ownerWalletId);
-    throw new ApiError(402, 'SESSION_LIMIT_EXCEEDED', 'Charge exceeds the remaining FiberPass balance.');
-  }
-
-  await fiberAdapter.authorizeCharge({
+  const attempt = await ChargeAttemptModel.create({
+    attemptId: randomUUID(),
     sessionId: input.sessionId,
-    appAddress: session.serviceAddress,
-    amount,
-    currency: session.currency
+    appId: input.appId,
+    apiKeyId: input.apiKeyId,
+    amount: Math.max(0, amount),
+    currency: 'USDC',
+    type: input.type,
+    status: 'pending',
+    metadata: input.metadata
   });
 
-  const nextSpent = roundMoney(session.spent + amount);
-  session.spent = nextSpent;
-  prependLogs(session, newLog(input.type, amount));
+  try {
+    if (amount <= 0) {
+      throw new ApiError(400, 'INVALID_CHARGE_AMOUNT', 'Charge amount must be greater than zero.');
+    }
 
-  if (nextSpent >= session.limit) {
-    session.status = 'expired';
-    session.expiryTime = 'Limit Exhausted';
-    prependLogs(session, newLog('Spending Limit Exhausted - Settled'));
-    await fiberAdapter.settleSession({ sessionId: input.sessionId, amount: 0, currency: session.currency, reason: 'expired' });
-  } else if (session.singleUse) {
-    const refundAmount = roundMoney(Math.max(0, session.limit - session.spent));
-    session.status = 'settled';
-    session.expiryTime = 'Single-use charge completed';
-    prependLogs(session, newLog(`Single-use Session Settled (Refunded $${refundAmount.toFixed(2)})`));
-    await WalletModel.updateOne({ walletId: ownerWalletId }, { $inc: { balance: refundAmount } });
-    await fiberAdapter.settleSession({ sessionId: input.sessionId, amount: refundAmount, currency: session.currency, reason: 'settled' });
+    const session = await getSessionOrThrow(input.sessionId);
+    const ownerWalletId = session.ownerWalletId as string;
+    attempt.ownerWalletId = ownerWalletId;
+    attempt.currency = session.currency;
+
+    if (input.appId) {
+      const appIdMatches = session.appId === input.appId;
+      const serviceAddressMatches = normalizedAddress(session.serviceAddress) === normalizedAddress(input.appServiceAddress);
+      if (!appIdMatches && !serviceAddressMatches) {
+        throw new ApiError(403, 'APP_SESSION_MISMATCH', 'This app cannot charge a FiberPass owned by another app.');
+      }
+    }
+
+    if (session.status !== 'active') {
+      throw new ApiError(409, 'SESSION_NOT_CHARGEABLE', 'Session is ' + session.status + '; charges are blocked.');
+    }
+
+    const expiryAt = session.expiryAt instanceof Date ? session.expiryAt : undefined;
+    if (expiryAt && expiryAt.getTime() <= Date.now()) {
+      session.status = 'expired';
+      session.expiryTime = 'Expired';
+      prependLogs(session, newLog('Charge Blocked - Session Expired'));
+      await session.save();
+      await publishOverview(ownerWalletId);
+      throw new ApiError(410, 'SESSION_EXPIRED', 'Session has expired; charges are blocked.');
+    }
+
+    const remaining = roundMoney(session.limit - session.spent);
+    if (amount > remaining) {
+      session.status = 'expired';
+      session.expiryTime = 'Limit Exhausted';
+      prependLogs(session, newLog('Charge Blocked - Spending Limit Exhausted'));
+      await session.save();
+      await fiberAdapter.settleSession({ sessionId: input.sessionId, amount: 0, currency: session.currency, reason: 'expired' });
+      await publishOverview(ownerWalletId);
+      throw new ApiError(402, 'SESSION_LIMIT_EXCEEDED', 'Charge exceeds the remaining FiberPass balance.');
+    }
+
+    await fiberAdapter.authorizeCharge({
+      sessionId: input.sessionId,
+      appAddress: session.serviceAddress,
+      amount,
+      currency: session.currency
+    });
+
+    const nextSpent = roundMoney(session.spent + amount);
+    session.spent = nextSpent;
+    prependLogs(session, newLog(input.type, amount));
+
+    if (nextSpent >= session.limit) {
+      session.status = 'expired';
+      session.expiryTime = 'Limit Exhausted';
+      prependLogs(session, newLog('Spending Limit Exhausted - Settled'));
+      await fiberAdapter.settleSession({ sessionId: input.sessionId, amount: 0, currency: session.currency, reason: 'expired' });
+    } else if (session.singleUse) {
+      const refundAmount = roundMoney(Math.max(0, session.limit - session.spent));
+      session.status = 'settled';
+      session.expiryTime = 'Single-use charge completed';
+      prependLogs(session, newLog('Single-use Session Settled (Refunded $' + refundAmount.toFixed(2) + ')'));
+      await WalletModel.updateOne({ walletId: ownerWalletId }, { $inc: { balance: refundAmount } });
+      await fiberAdapter.settleSession({ sessionId: input.sessionId, amount: refundAmount, currency: session.currency, reason: 'settled' });
+    }
+
+    await session.save();
+
+    attempt.status = 'succeeded';
+    attempt.resultingSpent = roundMoney(session.spent);
+    attempt.remainingBalance = roundMoney(Math.max(0, session.limit - session.spent));
+    await attempt.save();
+
+    const overview = await getSessionsOverview(ownerWalletId);
+    liveEvents.publish('overview:' + ownerWalletId, overview);
+    return overview;
+  } catch (error) {
+    const failure = failureFromError(error);
+    attempt.status = 'failed';
+    attempt.failureCode = failure.code;
+    attempt.failureMessage = failure.message;
+    await attempt.save().catch(() => undefined);
+    throw error;
   }
-
-  await session.save();
-  const overview = await getSessionsOverview(ownerWalletId);
-  liveEvents.publish(`overview:${ownerWalletId}`, overview);
-  return overview;
 }
 
 export async function chargeRandomActiveSession(): Promise<SessionsOverviewDto | null> {
