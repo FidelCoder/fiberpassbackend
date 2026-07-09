@@ -37,7 +37,7 @@ const sessionSchema = new Schema(
     spentMinor: { type: Number, min: 0, default: 0 },
     limit: { type: Number, required: true, min: 0.01 },
     limitMinor: { type: Number, min: 1 },
-    currency: { type: String, required: true, default: 'USDC' },
+    currency: { type: String, required: true, default: 'CKB' },
     duration: { type: String, required: true },
     status: { type: String, enum: SESSION_STATUSES, required: true, default: 'active', index: true },
     iconType: { type: String, enum: ICON_TYPES, required: true, default: 'rpc' },

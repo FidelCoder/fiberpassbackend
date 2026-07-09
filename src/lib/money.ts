@@ -1,4 +1,4 @@
-export const DEFAULT_CURRENCY = 'USDC';
+export const DEFAULT_CURRENCY = 'CKB';
 
 export interface CurrencyMetadata {
   code: string;
@@ -7,7 +7,8 @@ export interface CurrencyMetadata {
 }
 
 export const CURRENCY_METADATA: Record<string, CurrencyMetadata> = {
-  USDC: { code: 'USDC', decimals: 6, symbol: '$' }
+  USDC: { code: 'USDC', decimals: 6, symbol: '$' },
+  CKB: { code: 'CKB', decimals: 8, symbol: 'CKB' }
 };
 
 export function getCurrencyMetadata(currency: string = DEFAULT_CURRENCY): CurrencyMetadata {

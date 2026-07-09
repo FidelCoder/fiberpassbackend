@@ -6,7 +6,7 @@ Node.js + TypeScript API for prepaid, revocable Fiber payment sessions.
 
 - Express API
 - MongoDB + Mongoose
-- JoyID EVM challenge-response auth
+- JoyID challenge-response auth
 - Server-Sent Events for live dashboard updates
 - Integer minor-unit accounting for money values
 - Fiber Network JSON-RPC provider only
@@ -45,6 +45,7 @@ All product endpoints are available at their current paths and under `/v1` alias
 - `POST /auth/logout`
 - `GET /wallet/funding`
 - `POST /wallet/funding`
+- `POST /wallet/funding/sync`
 - `POST /wallet/funding/:fundingId/confirm`
 - `GET /sessions/create-policy`
 - `GET /sessions`

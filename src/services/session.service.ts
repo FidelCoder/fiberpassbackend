@@ -9,14 +9,14 @@ import { WalletModel, type WalletRecord } from '../models/wallet.model.js';
 import { writeAuditLog } from './audit.service.js';
 import { fiberProvider } from './fiberProvider.js';
 
-const LEGACY_PLACEHOLDER_BALANCE_MINOR = toMinorUnits('1240.50');
+const LEGACY_PLACEHOLDER_BALANCE_MINOR = toMinorUnits('1240.50', 'USDC');
 const HISTORY_STATUSES: SessionStatus[] = ['settled', 'revoked', 'expired'];
 const OPEN_STATUSES: SessionStatus[] = ['active', 'paused'];
 
 export const CREATE_SESSION_POLICY = {
-  minLimit: 0.05,
-  maxLimit: 500,
-  currency: 'USDC',
+  minLimit: 0.01,
+  maxLimit: 100000,
+  currency: 'CKB',
   minExpiryMinutes: 5,
   maxExpiryDays: 30,
   platformFeeBps: 50,
@@ -152,7 +152,7 @@ export interface WalletDto {
   connected: boolean;
   address: string;
   authProvider: 'joyid';
-  addressType: 'evm';
+  addressType: 'ckb';
   balance: number;
   balanceMinor: number;
   currency: string;
@@ -352,7 +352,7 @@ function toWalletDto(wallet: WalletRecord): WalletDto {
     connected: wallet.connected,
     address: wallet.address,
     authProvider: 'joyid',
-    addressType: 'evm',
+    addressType: 'ckb',
     balance: fromMinorUnits(balanceMinor, wallet.currency),
     balanceMinor,
     currency: wallet.currency
@@ -367,9 +367,9 @@ export function getCreateSessionPolicy(): CreateSessionPolicyDto {
   return {
     limits: {
       min: CREATE_SESSION_POLICY.minLimit,
-      minMinor: toMinorUnits(String(CREATE_SESSION_POLICY.minLimit)),
+      minMinor: toMinorUnits(String(CREATE_SESSION_POLICY.minLimit), CREATE_SESSION_POLICY.currency),
       max: CREATE_SESSION_POLICY.maxLimit,
-      maxMinor: toMinorUnits(String(CREATE_SESSION_POLICY.maxLimit)),
+      maxMinor: toMinorUnits(String(CREATE_SESSION_POLICY.maxLimit), CREATE_SESSION_POLICY.currency),
       currency: CREATE_SESSION_POLICY.currency
     },
     expiry: {
@@ -379,9 +379,9 @@ export function getCreateSessionPolicy(): CreateSessionPolicyDto {
     fees: {
       platformFeeBps: CREATE_SESSION_POLICY.platformFeeBps,
       minPlatformFee: CREATE_SESSION_POLICY.minPlatformFee,
-      minPlatformFeeMinor: toMinorUnits(String(CREATE_SESSION_POLICY.minPlatformFee)),
+      minPlatformFeeMinor: toMinorUnits(String(CREATE_SESSION_POLICY.minPlatformFee), CREATE_SESSION_POLICY.currency),
       estimatedNetworkFee: CREATE_SESSION_POLICY.estimatedNetworkFee,
-      estimatedNetworkFeeMinor: toMinorUnits(String(CREATE_SESSION_POLICY.estimatedNetworkFee))
+      estimatedNetworkFeeMinor: toMinorUnits(String(CREATE_SESSION_POLICY.estimatedNetworkFee), CREATE_SESSION_POLICY.currency)
     },
     fiber: {
       provider: fiberProvider.kind,
@@ -397,13 +397,13 @@ function getVerifiedApp(appId?: string): VerifiedAppDto | undefined {
 }
 
 function validateCreateLimit(limitMinor: number): void {
-  const minMinor = toMinorUnits(String(CREATE_SESSION_POLICY.minLimit));
-  const maxMinor = toMinorUnits(String(CREATE_SESSION_POLICY.maxLimit));
+  const minMinor = toMinorUnits(String(CREATE_SESSION_POLICY.minLimit), CREATE_SESSION_POLICY.currency);
+  const maxMinor = toMinorUnits(String(CREATE_SESSION_POLICY.maxLimit), CREATE_SESSION_POLICY.currency);
   if (limitMinor < minMinor || limitMinor > maxMinor) {
     throw new ApiError(
       400,
       'SESSION_LIMIT_OUT_OF_RANGE',
-      'FiberPass limit must be between $' + CREATE_SESSION_POLICY.minLimit.toFixed(2) + ' and $' + CREATE_SESSION_POLICY.maxLimit.toFixed(2) + '.'
+      'FiberPass limit must be between ' + CREATE_SESSION_POLICY.minLimit + ' and ' + CREATE_SESSION_POLICY.maxLimit.toLocaleString('en-US') + ' ' + CREATE_SESSION_POLICY.currency + '.'
     );
   }
 }
@@ -430,7 +430,7 @@ function validateExpiryAt(expiryAt?: string): Date | undefined {
 }
 
 function estimatePlatformFeeMinor(limitMinor: number): number {
-  return Math.max(toMinorUnits(String(CREATE_SESSION_POLICY.minPlatformFee)), Math.ceil(limitMinor * (CREATE_SESSION_POLICY.platformFeeBps / 10000)));
+  return Math.max(toMinorUnits(String(CREATE_SESSION_POLICY.minPlatformFee), CREATE_SESSION_POLICY.currency), Math.ceil(limitMinor * (CREATE_SESSION_POLICY.platformFeeBps / 10000)));
 }
 
 export function walletIdFromAddress(address: string): string {
@@ -477,7 +477,7 @@ export async function ensureWalletForAddress(address: string): Promise<WalletRec
         walletId,
         balance: 0,
         balanceMinor: 0,
-        currency: 'USDC'
+        currency: CREATE_SESSION_POLICY.currency
       }
     },
     { upsert: true, new: true }
@@ -569,7 +569,7 @@ export async function createSession(input: CreateSessionInput, walletId: string)
   const serviceAddress = verifiedApp?.serviceAddress ?? input.serviceAddress;
   const appPermissions = verifiedApp?.permissions ?? input.appPermissions ?? [];
   const platformFeeEstimateMinor = estimatePlatformFeeMinor(limitMinor);
-  const networkFeeEstimateMinor = toMinorUnits(String(CREATE_SESSION_POLICY.estimatedNetworkFee));
+  const networkFeeEstimateMinor = toMinorUnits(String(CREATE_SESSION_POLICY.estimatedNetworkFee), input.currency);
   const limit = fromMinorUnits(limitMinor, input.currency);
 
   const wallet = await WalletModel.findOneAndUpdate(
@@ -728,7 +728,7 @@ export async function revokeSession(publicId: string, walletId: string): Promise
   session.fiberStatus = 'revoked';
   session.fiberProofId = result.proofId;
   session.expiryTime = 'Revoked by Owner';
-  prependLogs(session, newLog('Session Revoked (Refunded $' + refundAmount.toFixed(2) + ')'));
+  prependLogs(session, newLog('Session Revoked (Refunded ' + refundAmount.toLocaleString('en-US') + ' ' + session.currency + ')'));
   await session.save();
 
   await WalletModel.updateOne({ walletId }, { $inc: { balanceMinor: refundMinor, balance: refundAmount } });
@@ -761,7 +761,7 @@ export async function settleSession(publicId: string, walletId: string): Promise
   session.fiberStatus = 'settled';
   session.fiberProofId = result.proofId;
   session.expiryTime = 'Settled by User';
-  prependLogs(session, newLog('Session Settled (Refunded $' + refundAmount.toFixed(2) + ')'));
+  prependLogs(session, newLog('Session Settled (Refunded ' + refundAmount.toLocaleString('en-US') + ' ' + session.currency + ')'));
   await session.save();
 
   await WalletModel.updateOne({ walletId }, { $inc: { balanceMinor: refundMinor, balance: refundAmount } });
@@ -787,13 +787,13 @@ function failureFromError(error: unknown): { code: string; message: string } {
 }
 
 export async function chargeSession(input: ChargeSessionInput): Promise<SessionsOverviewDto> {
-  const amountMinor = toMinorUnits(String(input.amount));
+  const amountMinor = toMinorUnits(String(input.amount), CREATE_SESSION_POLICY.currency);
   const attempt = await ChargeAttemptModel.create({
     attemptId: randomUUID(),
     sessionId: input.sessionId,
     appId: input.appId,
     apiKeyId: input.apiKeyId,
-    amount: fromMinorUnits(amountMinor),
+    amount: fromMinorUnits(amountMinor, CREATE_SESSION_POLICY.currency),
     amountMinor,
     currency: CREATE_SESSION_POLICY.currency,
     type: input.type,
@@ -906,7 +906,7 @@ export async function chargeSession(input: ChargeSessionInput): Promise<Sessions
       session.fiberStatus = 'settled';
       session.fiberProofId = result.proofId;
       session.expiryTime = 'Single-use charge completed';
-      prependLogs(session, newLog('Single-use Session Settled (Refunded $' + refundAmount.toFixed(2) + ')'));
+      prependLogs(session, newLog('Single-use Session Settled (Refunded ' + refundAmount.toLocaleString('en-US') + ' ' + currency + ')'));
       await WalletModel.updateOne({ walletId: ownerWalletId }, { $inc: { balanceMinor: refundMinor, balance: refundAmount } });
     } else {
       session.fiberStatus = 'active';

@@ -13,8 +13,8 @@ await assert.rejects(
     localSessionId: 'session-1',
     walletId: 'wallet-1',
     appAddress: 'ckt1qrfrwcdnvssswdwpn3s9v8fp87emat306ctjwsm3nmlkjg8qyza2cqgqqxlert9yy2g2hhklyq8m24sakhfaqlyf4qd4c3fl',
-    amountMinor: 1_000_000,
-    currency: 'USDC'
+    amountMinor: 100_000_000,
+    currency: 'CKB'
   }),
   /FIBER_PEER_ID/
 );

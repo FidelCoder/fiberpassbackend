@@ -1,7 +1,9 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { getAddress, verifyMessage } from 'ethers';
+import { config as lumosConfig, helpers } from '@ckb-lumos/lumos';
+import { verifyCredential, verifySignature, type SignChallengeResponseData } from '@joyid/ckb';
 import { env } from '../config/env.js';
 import { ApiError } from '../lib/errors.js';
+import { fallbackMinorUnits } from '../lib/money.js';
 import { AuthChallengeModel, AuthSessionModel } from '../models/auth.model.js';
 import { writeAuditLog } from './audit.service.js';
 import type { AuthContext } from '../types/auth.js';
@@ -20,7 +22,7 @@ export interface AuthChallengeDto {
 export interface AuthVerifyInput {
   challengeId: string;
   address: string;
-  signature: string;
+  signature: SignChallengeResponseData;
 }
 
 export interface AuthVerifyDto {
@@ -29,12 +31,34 @@ export interface AuthVerifyDto {
   wallet: WalletDto;
 }
 
+function networkConfig() {
+  return env.FIBER_NETWORK.toLowerCase().includes('main') ? lumosConfig.MAINNET : lumosConfig.TESTNET;
+}
+
 function normalizeAddress(address: string): string {
+  const normalized = address.trim().toLowerCase();
   try {
-    return getAddress(address);
+    helpers.parseAddress(normalized, { config: networkConfig() });
+    return normalized;
   } catch {
-    throw new ApiError(400, 'INVALID_WALLET_ADDRESS', 'JoyID returned an invalid EVM wallet address.');
+    throw new ApiError(400, 'INVALID_WALLET_ADDRESS', 'JoyID returned an invalid CKB wallet address for this network.');
   }
+}
+
+function balanceMinorForWallet(wallet: { balance?: number | null; balanceMinor?: number | null; currency?: string | null }): number {
+  return fallbackMinorUnits(wallet.balanceMinor, wallet.balance, wallet.currency ?? 'CKB');
+}
+
+function walletDto(input: { connected?: boolean; address: string; balance: number; balanceMinor?: number | null; currency: string }): WalletDto {
+  return {
+    connected: input.connected ?? true,
+    address: input.address,
+    authProvider: 'joyid',
+    addressType: 'ckb',
+    balance: input.balance,
+    balanceMinor: balanceMinorForWallet(input),
+    currency: input.currency
+  };
 }
 
 function tokenHash(token: string): string {
@@ -98,15 +122,23 @@ export async function verifyAuthChallenge(input: AuthVerifyInput): Promise<AuthV
     throw new ApiError(401, 'AUTH_ADDRESS_MISMATCH', 'Signed wallet address does not match the requested JoyID address.');
   }
 
-  let recoveredAddress: string;
-  try {
-    recoveredAddress = getAddress(verifyMessage(challenge.message, input.signature));
-  } catch {
-    throw new ApiError(401, 'AUTH_SIGNATURE_INVALID', 'JoyID signature could not be verified.');
+  if (input.signature.challenge !== challenge.message) {
+    throw new ApiError(401, 'AUTH_CHALLENGE_MISMATCH', 'JoyID signed challenge does not match the active FiberPass login challenge.');
   }
 
-  if (recoveredAddress !== normalizedAddress) {
-    throw new ApiError(401, 'AUTH_SIGNATURE_MISMATCH', 'JoyID signature does not match the connected wallet.');
+  const signatureValid = await verifySignature(input.signature);
+  if (!signatureValid) {
+    throw new ApiError(401, 'AUTH_SIGNATURE_INVALID', 'JoyID CKB signature could not be verified.');
+  }
+
+  const credentialValid = await verifyCredential({
+    pubkey: input.signature.pubkey,
+    address: normalizedAddress,
+    keyType: input.signature.keyType,
+    alg: input.signature.alg
+  }, env.JOYID_SERVER_URL);
+  if (!credentialValid) {
+    throw new ApiError(401, 'AUTH_CREDENTIAL_INVALID', 'JoyID credential is not registered for the connected CKB address.');
   }
 
   challenge.consumedAt = new Date();
@@ -134,15 +166,13 @@ export async function verifyAuthChallenge(input: AuthVerifyInput): Promise<AuthV
   return {
     token,
     expiresAt: expiresAt.toISOString(),
-    wallet: {
+    wallet: walletDto({
       connected: true,
       address: normalizedAddress,
-      authProvider: 'joyid',
-      addressType: 'evm',
       balance: wallet.balance,
-      balanceMinor: wallet.balanceMinor ?? Math.round(wallet.balance * 1_000_000),
+      balanceMinor: wallet.balanceMinor,
       currency: wallet.currency
-    }
+    })
   };
 }
 
@@ -178,14 +208,12 @@ export async function revokeAuthToken(token: string): Promise<void> {
 export async function getWalletForAuthContext(auth: AuthContext): Promise<{ wallet: WalletDto }> {
   const wallet = await ensureWalletForAddress(auth.address);
   return {
-    wallet: {
+    wallet: walletDto({
       connected: true,
       address: wallet.address,
-      authProvider: 'joyid',
-      addressType: 'evm',
       balance: wallet.balance,
-      balanceMinor: wallet.balanceMinor ?? Math.round(wallet.balance * 1_000_000),
+      balanceMinor: wallet.balanceMinor,
       currency: wallet.currency
-    }
+    })
   };
 }

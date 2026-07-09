@@ -12,7 +12,7 @@ const chargeAttemptSchema = new Schema(
     ownerWalletId: { type: String, index: true },
     amount: { type: Number, required: true, min: 0 },
     amountMinor: { type: Number, min: 0 },
-    currency: { type: String, required: true, default: 'USDC' },
+    currency: { type: String, required: true, default: 'CKB' },
     type: { type: String, required: true, trim: true },
     status: { type: String, enum: CHARGE_ATTEMPT_STATUSES, required: true, default: 'pending', index: true },
     failureCode: { type: String, trim: true },

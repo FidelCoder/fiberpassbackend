@@ -84,6 +84,23 @@ export function deriveVaultIdHash(accountIdHash: string): string {
   return ckbHash('fiberpass:vault:' + accountIdHash);
 }
 
+
+export function minimalVaultCellCapacityShannons(script: DerivedVaultDto['script']): number {
+  const cell = {
+    cellOutput: {
+      capacity: '0x0',
+      lock: script,
+      type: undefined
+    },
+    data: '0x'
+  } as Parameters<typeof helpers.minimalCellCapacity>[0];
+  const capacity = Number(helpers.minimalCellCapacity(cell));
+  if (!Number.isSafeInteger(capacity) || capacity <= 0) {
+    throw new Error('Unable to calculate safe minimum vault cell capacity.');
+  }
+  return capacity;
+}
+
 export function deriveVaultForWallet(input: { walletId: string; ownerLockHash?: string }): DerivedVaultDto | null {
   const runtime = getVaultRuntimeConfig();
   if (!runtime.configured) return null;

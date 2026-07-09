@@ -8,15 +8,15 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx src/tests/money.test.ts && tsx src/tests/fiberAddress.test.ts && tsx src/tests/vault.test.ts && tsx src/tests/fiberProvider.rpc.test.ts",
+    "test": "tsx src/tests/money.test.ts && tsx src/tests/fiberAddress.test.ts && tsx src/tests/vault.test.ts && tsx src/tests/ckbChain.test.ts && tsx src/tests/fiberProvider.rpc.test.ts",
     "vault:build": "node lockscripts/fiberpass-vault-lock/scripts/build-and-hash.mjs",
     "vault:deploy:testnet": "node lockscripts/fiberpass-vault-lock/scripts/deploy-testnet.mjs"
   },
   "dependencies": {
     "@ckb-lumos/lumos": "^0.23.0",
+    "@joyid/ckb": "^1.1.4",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
-    "ethers": "^6.17.0",
     "express": "^4.21.2",
     "mongoose": "^8.19.1",
     "zod": "^4.1.12"
