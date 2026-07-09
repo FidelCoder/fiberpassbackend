@@ -193,6 +193,8 @@ export interface SessionDto {
 export interface WalletDto {
   connected: boolean;
   address: string;
+  authProvider: 'joyid';
+  addressType: 'evm';
   balance: number;
   balanceMinor: number;
   currency: string;
@@ -391,6 +393,8 @@ function toWalletDto(wallet: WalletRecord): WalletDto {
   return {
     connected: wallet.connected,
     address: wallet.address,
+    authProvider: 'joyid',
+    addressType: 'evm',
     balance: fromMinorUnits(balanceMinor, wallet.currency),
     balanceMinor,
     currency: wallet.currency

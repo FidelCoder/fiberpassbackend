@@ -137,6 +137,8 @@ export async function verifyAuthChallenge(input: AuthVerifyInput): Promise<AuthV
     wallet: {
       connected: true,
       address: normalizedAddress,
+      authProvider: 'joyid',
+      addressType: 'evm',
       balance: wallet.balance,
       balanceMinor: wallet.balanceMinor ?? Math.round(wallet.balance * 1_000_000),
       currency: wallet.currency
@@ -179,6 +181,8 @@ export async function getWalletForAuthContext(auth: AuthContext): Promise<{ wall
     wallet: {
       connected: true,
       address: wallet.address,
+      authProvider: 'joyid',
+      addressType: 'evm',
       balance: wallet.balance,
       balanceMinor: wallet.balanceMinor ?? Math.round(wallet.balance * 1_000_000),
       currency: wallet.currency
