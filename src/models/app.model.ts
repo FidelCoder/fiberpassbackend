@@ -6,6 +6,17 @@ export type AppStatus = (typeof APP_STATUSES)[number];
 export const API_KEY_STATUSES = ['active', 'revoked'] as const;
 export type ApiKeyStatus = (typeof API_KEY_STATUSES)[number];
 
+export const APP_API_KEY_SCOPES = [
+  'charges:create',
+  'recipients:read',
+  'recipients:write',
+  'invoices:create',
+  'payments:queue',
+  'payments:charge'
+] as const;
+export type AppApiKeyScope = (typeof APP_API_KEY_SCOPES)[number];
+export const DEFAULT_APP_API_KEY_SCOPES: AppApiKeyScope[] = ['charges:create'];
+
 const appSchema = new Schema(
   {
     appId: { type: String, required: true, unique: true, index: true },
@@ -31,6 +42,7 @@ const appApiKeySchema = new Schema(
     keyHash: { type: String, required: true, unique: true, index: true },
     keyPrefix: { type: String, required: true },
     label: { type: String, trim: true, default: 'Default key' },
+    scopes: { type: [{ type: String, enum: APP_API_KEY_SCOPES }], default: DEFAULT_APP_API_KEY_SCOPES },
     status: { type: String, enum: API_KEY_STATUSES, required: true, default: 'active', index: true },
     lastUsedAt: { type: Date },
     revokedAt: { type: Date }

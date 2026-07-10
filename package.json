@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx src/tests/money.test.ts && tsx src/tests/fiberAddress.test.ts && tsx src/tests/vault.test.ts && tsx src/tests/ckbChain.test.ts && tsx src/tests/fiberProvider.rpc.test.ts && tsx src/tests/automationFlow.test.ts",
+    "test": "tsx src/tests/money.test.ts && tsx src/tests/fiberAddress.test.ts && tsx src/tests/vault.test.ts && tsx src/tests/ckbChain.test.ts && tsx src/tests/fiberProvider.rpc.test.ts && tsx src/tests/automationFlow.test.ts && tsx src/tests/appPermissions.test.ts",
     "vault:build": "node lockscripts/fiberpass-vault-lock/scripts/build-and-hash.mjs",
     "vault:deploy:testnet": "node lockscripts/fiberpass-vault-lock/scripts/deploy-testnet.mjs"
   },
