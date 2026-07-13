@@ -13,10 +13,11 @@ import { WalletModel, type WalletRecord } from '../models/wallet.model.js';
 import { writeAuditLog } from './audit.service.js';
 import { requireEmailConfigured } from './email.service.js';
 import { fiberAdapter, hashFiberPaymentRequest } from './fiberAdapter.js';
+import { ensureVaultFundedFiberLiquidity } from './fiberLiquidityBridge.service.js';
 import { fiberProvider } from './fiberProvider.js';
 import { sendRecipientInviteEmail, sendRecipientPayoutReceiptEmail } from './recipientEmail.service.js';
 import { deriveVaultForWallet } from './vault.service.js';
-import { executeVaultPayout, getVaultPayoutReadiness } from './vaultPayout.service.js';
+import { executeVaultPayout } from './vaultPayout.service.js';
 
 const LEGACY_PLACEHOLDER_BALANCE_MINOR = toMinorUnits('1240.50', 'USDC');
 const HISTORY_STATUSES: SessionStatus[] = ['settled', 'revoked', 'expired'];
@@ -35,7 +36,15 @@ const RETRYABLE_VAULT_CONFIG_FAILURE_CODES = [
   'VAULT_LIVE_CAPACITY_INSUFFICIENT',
   'OPERATOR_FEE_CAPACITY_INSUFFICIENT'
 ] as const;
-const RETRYABLE_FIBER_FAILURE_CODES = ['FIBER_PAYMENT_FAILED'] as const;
+const RETRYABLE_FIBER_FAILURE_CODES = [
+  'FIBER_PAYMENT_FAILED',
+  'FIBER_LIQUIDITY_BRIDGE_PENDING',
+  'FIBER_LIQUIDITY_BRIDGE_TX_FAILED',
+  'FIBER_CHANNEL_OPEN_PENDING',
+  'FIBER_CHANNEL_OPEN_FAILED',
+  'FIBER_NODE_UNREACHABLE',
+  'FIBER_NODE_FUNDING_ADDRESS_MISSING'
+] as const;
 
 export const CREATE_SESSION_POLICY = {
   minLimit: 0.01,
@@ -98,6 +107,13 @@ export interface RecipientWalletDto {
   payoutNotifiedAt?: string | Date;
   payoutNotificationStatus?: 'not_required' | 'pending' | 'sent' | 'failed';
   payoutNotificationFailure?: string;
+  fiberLiquidityBridgeTxHash?: string;
+  fiberLiquidityBridgeAmountMinor?: number;
+  fiberLiquidityBridgeStatus?: string;
+  fiberLiquidityBridgeCreatedAt?: string | Date;
+  fiberChannelOpenProofId?: string;
+  fiberChannelOpenAmountMinor?: number;
+  fiberChannelOpenRequestedAt?: string | Date;
 }
 
 export interface ChargeAttemptDto {
@@ -584,7 +600,7 @@ interface PreparedRecipientInvite {
 function prepareRecipientInvites(wallets: RecipientWalletDto[]): { wallets: RecipientWalletDto[]; invites: PreparedRecipientInvite[] } {
   const invites: PreparedRecipientInvite[] = [];
   const preparedWallets = wallets.map((wallet, index) => {
-    if (!wallet.email || wallet.address) return wallet;
+    if (!wallet.email || wallet.fiberInvoice) return wallet;
     const token = newMagicToken();
     const expiresAt = inviteExpiryDate();
     invites.push({ index, token, email: wallet.email, expiresAt });
@@ -725,21 +741,16 @@ export async function getRecipientClaim(token: string): Promise<RecipientClaimDt
   return recipientClaimDto(claim);
 }
 
-export async function claimRecipientWallet(token: string, input: { address?: string; fiberInvoice?: string }, timeZone?: string): Promise<RecipientClaimDto> {
-  const address = cleanOptionalString(input.address);
+export async function claimRecipientWallet(token: string, input: { fiberInvoice?: string }, timeZone?: string): Promise<RecipientClaimDto> {
   const fiberInvoice = validateFiberPaymentRequest(input.fiberInvoice);
-  if (!address && !fiberInvoice) {
-    throw new ApiError(400, 'RECIPIENT_DESTINATION_REQUIRED', 'Add a Fiber invoice/payment request or a CKB wallet address.');
-  }
-  if (address && !isFiberCkbAddress(address)) {
-    throw new ApiError(400, 'INVALID_RECIPIENT_ADDRESS', FIBER_CKB_ADDRESS_ERROR);
+  if (!fiberInvoice) {
+    throw new ApiError(400, 'FIBER_INVOICE_REQUIRED', 'Add a Fiber invoice/payment request before this payout can be released through Fiber Network.');
   }
   const claim = await findRecipientClaim(token);
   if (!claim) throw new ApiError(404, 'RECIPIENT_CLAIM_NOT_FOUND', 'This FiberPass payment link was not found.');
   if (claim.expired) throw new ApiError(410, 'RECIPIENT_CLAIM_EXPIRED', 'This FiberPass payment link has expired.');
 
-  if (address) claim.session.set('recipientWallets.' + claim.index + '.address', address);
-  if (fiberInvoice) claim.session.set('recipientWallets.' + claim.index + '.fiberInvoice', fiberInvoice);
+  claim.session.set('recipientWallets.' + claim.index + '.fiberInvoice', fiberInvoice);
   claim.session.set('recipientWallets.' + claim.index + '.status', 'pending');
   claim.session.set('recipientWallets.' + claim.index + '.inviteStatus', 'claimed');
   const recipientTimeZone = normalizeTimeZone(timeZone);
@@ -846,8 +857,8 @@ function normalizeRecipientWallets(input: {
     if (!wallet.name) {
       throw new ApiError(400, 'RECIPIENT_NAME_REQUIRED', 'Each recipient needs a label.');
     }
-    if (!wallet.address && !wallet.email && !wallet.fiberInvoice) {
-      throw new ApiError(400, 'RECIPIENT_DESTINATION_REQUIRED', 'Each recipient needs a Fiber invoice, CKB wallet address, or email invite.');
+    if (!wallet.email && !wallet.fiberInvoice) {
+      throw new ApiError(400, 'RECIPIENT_DESTINATION_REQUIRED', 'Each recipient needs a Fiber invoice/payment request or an email invite to collect one.');
     }
     if (wallet.address && !isFiberCkbAddress(wallet.address)) {
       throw new ApiError(400, 'INVALID_RECIPIENT_ADDRESS', FIBER_CKB_ADDRESS_ERROR);
@@ -875,7 +886,7 @@ function normalizeRecipientWallets(input: {
       }
       seenFiberInvoices.add(wallet.fiberInvoice);
     }
-    const status = wallet.address || wallet.fiberInvoice ? 'pending' : 'awaiting_details';
+    const status = wallet.fiberInvoice ? 'pending' : 'awaiting_details';
     wallets.push({
       name: wallet.name,
       address: wallet.address,
@@ -884,7 +895,7 @@ function normalizeRecipientWallets(input: {
       amountMinor,
       fiberInvoice: wallet.fiberInvoice,
       status,
-      inviteStatus: wallet.email && !wallet.address && !wallet.fiberInvoice ? 'pending' : 'not_required',
+      inviteStatus: wallet.email && !wallet.fiberInvoice ? 'pending' : 'not_required',
       payoutNotificationStatus: wallet.email ? 'pending' : 'not_required'
     });
   }
@@ -935,10 +946,10 @@ function buildSessionChargePolicy(input: {
   }
   if (input.purpose === 'scheduled_release') {
     const recipient = input.recipientCount && input.recipientCount > 1 ? ' to ' + input.recipientCount + ' wallets' : input.recipientName ? ' to ' + input.recipientName : '';
-    return 'Reserved funds auto-release once' + recipient + ' on the scheduled date through the FiberPass vault.';
+    return 'Reserved vault funds auto-release once' + recipient + ' on the scheduled date through Fiber Network.';
   }
   const recipient = input.recipientCount && input.recipientCount > 1 ? ' to ' + input.recipientCount + ' wallets' : input.recipientName ? ' to ' + input.recipientName : '';
-  return 'Recurring reserved funds auto-release ' + cadenceLabel(input.releaseCadence) + recipient + ' through the FiberPass vault.';
+  return 'Recurring reserved vault funds auto-release ' + cadenceLabel(input.releaseCadence) + recipient + ' through Fiber Network.';
 }
 
 function metadataString(metadata: Record<string, unknown> | undefined, ...keys: string[]): string | undefined {
@@ -1896,7 +1907,7 @@ function isStaleProcessingPayout(wallet: RecipientWalletDto, nowMs = Date.now())
 }
 
 function isPayoutRecipientProcessable(wallet: RecipientWalletDto): boolean {
-  if (!wallet.address && !wallet.fiberInvoice) return false;
+  if (!wallet.fiberInvoice && !wallet.address) return false;
   return !wallet.status || wallet.status === 'pending' || (wallet.status === 'failed' && isRetryablePayoutFailure(wallet) && isRetryBackoffElapsed(wallet)) || isStaleProcessingPayout(wallet);
 }
 
@@ -2025,7 +2036,7 @@ async function sendPayoutReceiptIfNeeded(input: {
       amountMinor: dueWalletAmountMinor(input.wallet, input.session.currency),
       currency: input.session.currency,
       txHash: input.attempt.proofId,
-      explorerUrl: ckbTransactionExplorerUrl(input.attempt.proofId, input.attempt.network ?? env.FIBER_NETWORK),
+      explorerUrl: input.attempt.proofType === 'ckb_transaction' ? ckbTransactionExplorerUrl(input.attempt.proofId, input.attempt.network ?? env.FIBER_NETWORK) : undefined,
       paidAt: new Date(),
       reference: input.session.paymentReference ?? undefined,
       timeZone: input.wallet.recipientTimeZone
@@ -2062,8 +2073,15 @@ async function finalizePayoutCycleIfComplete(sessionId: string, walletId: string
         amountMinor: wallet.amountMinor,
         fiberInvoice: wallet.fiberInvoice,
         email: wallet.email,
-        status: wallet.address || wallet.fiberInvoice ? 'pending' : 'awaiting_details',
-        inviteStatus: wallet.address || wallet.fiberInvoice ? 'claimed' : wallet.inviteStatus
+        fiberLiquidityBridgeTxHash: undefined,
+        fiberLiquidityBridgeAmountMinor: undefined,
+        fiberLiquidityBridgeStatus: undefined,
+        fiberLiquidityBridgeCreatedAt: undefined,
+        fiberChannelOpenProofId: undefined,
+        fiberChannelOpenAmountMinor: undefined,
+        fiberChannelOpenRequestedAt: undefined,
+        status: wallet.fiberInvoice ? 'pending' : 'awaiting_details',
+        inviteStatus: wallet.fiberInvoice ? 'claimed' : wallet.inviteStatus
       })));
       prependLogs(session, newLog('Recurring Payout Cycle Completed'));
       await session.save();
@@ -2077,7 +2095,6 @@ async function finalizePayoutCycleIfComplete(sessionId: string, walletId: string
 
 export async function runDueSessionPayouts(input: DueSessionPayoutWorkerInput = {}): Promise<DueSessionPayoutWorkerResult> {
   const limit = Math.min(Math.max(input.limit ?? 10, 1), 100);
-  const vaultReadiness = getVaultPayoutReadiness();
   const staleBefore = new Date(Date.now() - PAYOUT_PROCESSING_STALE_MS);
   const retryBefore = new Date(Date.now() - PAYOUT_RETRY_BACKOFF_MS);
   const recipientStatusFilters: Record<string, unknown>[] = [
@@ -2143,16 +2160,27 @@ export async function runDueSessionPayouts(input: DueSessionPayoutWorkerInput = 
 
       const recipientAddress = wallet.address;
       const fiberInvoice = wallet.fiberInvoice;
-      if (!recipientAddress && !fiberInvoice) {
-        result.skipped += 1;
+      if (!fiberInvoice) {
+        await markRecipientWalletFailure({
+          sessionId: session.publicId,
+          index,
+          failure: {
+            code: 'FIBER_INVOICE_REQUIRED',
+            message: 'Fiber-only payouts require a Fiber invoice/payment request. Plain CKB wallet addresses are not accepted for this pass.'
+          }
+        });
+        result.failed += 1;
         continue;
       }
 
       try {
-        const useFiberRail = Boolean(fiberInvoice);
-        if (!useFiberRail && !vaultReadiness.ready) {
-          throw new ApiError(503, vaultReadiness.code ?? 'VAULT_PAYOUT_NOT_READY', vaultReadiness.message ?? 'Direct vault payout is not ready.');
-        }
+        await ensureVaultFundedFiberLiquidity({
+          ownerWalletId: session.ownerWalletId as string,
+          sessionId: session.publicId,
+          recipientIndex: index,
+          amountMinor,
+          currency: session.currency
+        });
         await chargeSession({
           sessionId: session.publicId,
           amount: fromMinorUnits(amountMinor, session.currency),
@@ -2162,8 +2190,8 @@ export async function runDueSessionPayouts(input: DueSessionPayoutWorkerInput = 
           paymentRequest: fiberInvoice,
           metadata: {
             scheduledPayout: true,
-            directVaultPayout: !useFiberRail,
-            payoutRail: useFiberRail ? "fiber" : "ckb_vault",
+            directVaultPayout: false,
+            payoutRail: "fiber",
             recipientIndex: index,
             recipientName: wallet.name,
             recipientAddress,

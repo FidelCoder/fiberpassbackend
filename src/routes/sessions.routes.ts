@@ -29,7 +29,7 @@ const recipientWalletSchema = z.object({
   email: z.string().trim().email().max(190).optional().or(z.literal('')),
   amount: z.coerce.number().positive().max(CREATE_SESSION_POLICY.maxLimit).optional(),
   fiberInvoice: z.string().trim().min(16, 'Enter a full Fiber invoice/payment request; short placeholders cannot be paid.').max(2000).optional()
-}).refine((value) => Boolean(value.address || value.email || value.fiberInvoice), 'Each recipient needs a Fiber invoice, CKB wallet address, or email.');
+}).refine((value) => Boolean(value.email || value.fiberInvoice), 'Each recipient needs a Fiber invoice/payment request or an email invite to collect one.');
 
 const createSessionSchema = z.object({
   name: z.string().trim().min(1).max(80),
@@ -67,10 +67,9 @@ const topUpSchema = z.object({
 const paramsSchema = z.object({ id: z.string().min(1) });
 const claimParamsSchema = z.object({ token: z.string().trim().min(32).max(200) });
 const claimWalletSchema = z.object({
-  address: z.string().trim().max(190).optional().or(z.literal('')).refine((value) => !value || isFiberCkbAddress(value), FIBER_CKB_ADDRESS_ERROR),
-  fiberInvoice: z.string().trim().min(16, 'Enter a full Fiber invoice/payment request; short placeholders cannot be paid.').max(2000).optional().or(z.literal('')),
+  fiberInvoice: z.string().trim().min(16, 'Enter a full Fiber invoice/payment request; short placeholders cannot be paid.').max(2000),
   timeZone: z.string().trim().min(1).max(80).optional()
-}).refine((value) => Boolean(value.address || value.fiberInvoice), 'Add a Fiber invoice/payment request or a CKB wallet address.');
+});
 
 export const sessionsRouter = Router();
 
@@ -81,8 +80,8 @@ sessionsRouter.get('/recipient-claims/:token', asyncHandler(async (request, resp
 
 sessionsRouter.post('/recipient-claims/:token', asyncHandler(async (request, response) => {
   const { token } = claimParamsSchema.parse(request.params);
-  const { address, fiberInvoice, timeZone } = claimWalletSchema.parse(request.body ?? {});
-  response.json(await claimRecipientWallet(token, { address, fiberInvoice }, timeZone));
+  const { fiberInvoice, timeZone } = claimWalletSchema.parse(request.body ?? {});
+  response.json(await claimRecipientWallet(token, { fiberInvoice }, timeZone));
 }));
 
 sessionsRouter.get('/sessions/create-policy', requireAuth, asyncHandler(async (_request, response) => {

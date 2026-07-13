@@ -17,9 +17,9 @@ The dashboard must show the logged-in user's vault balance and pass history, not
 Fiber nodes are infrastructure for payment execution and future channel/app payments. They are not individual user wallets.
 
 - App/API charges execute through the Fiber payment adapter with a real payment request.
-- Scheduled invoice payouts execute through Fiber when a recipient supplies a Fiber invoice/payment request.
-- Scheduled invoice payouts to plain CKB addresses execute from the vault lock because a CKB address is not a Fiber payment request.
-- The Fiber node wallet may hold small operator liquidity for channel operations and fees, but user balances remain tracked by vault accounting.
+- Scheduled invoice payouts require a Fiber invoice/payment request. Plain CKB wallet addresses are not valid Fiber payout destinations.
+- When Fiber channel liquidity is insufficient, FiberPass bridges the reserved user vault liquidity to the Fiber node funding lock, opens channel liquidity, and retries the Fiber payment when the channel is active.
+- The Fiber node wallet may hold small operator buffer for channel fees/change, but user balances remain tracked by vault accounting.
 
 ## Charge Invariants
 

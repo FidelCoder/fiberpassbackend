@@ -46,6 +46,13 @@ const recipientWalletSchema = new Schema(
     lastFailureMessage: { type: String, trim: true },
     payoutProofId: { type: String, trim: true },
     payoutExplorerUrl: { type: String, trim: true },
+    fiberLiquidityBridgeTxHash: { type: String, trim: true },
+    fiberLiquidityBridgeAmountMinor: { type: Number, min: 1 },
+    fiberLiquidityBridgeStatus: { type: String, trim: true },
+    fiberLiquidityBridgeCreatedAt: { type: Date },
+    fiberChannelOpenProofId: { type: String, trim: true },
+    fiberChannelOpenAmountMinor: { type: Number, min: 1 },
+    fiberChannelOpenRequestedAt: { type: Date },
     payoutNotifiedAt: { type: Date },
     payoutNotificationStatus: { type: String, enum: ['not_required', 'pending', 'sent', 'failed'], default: 'not_required' },
     payoutNotificationFailure: { type: String, trim: true }

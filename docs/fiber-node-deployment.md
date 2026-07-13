@@ -77,7 +77,7 @@ FIBER_PEER_ID=<peer id from fnn-cli info when needed for open_channel>
 
 Then redeploy the backend.
 
-The direct vault payout flow can continue using `CKB_TESTNET_RPC_URL=https://testnet.ckb.dev`. Fiber RPC is needed for channel-style Fiber operations such as opening channels, sending Fiber invoices, and checking Fiber node state.
+Vault funding and bridge transactions continue using `CKB_TESTNET_RPC_URL=https://testnet.ckb.dev`. Fiber RPC is needed for channel operations such as opening channels, sending Fiber invoices, and checking Fiber node state.
 
 ## Vercel Deployment Shape
 
@@ -115,4 +115,4 @@ After deployment, check:
 curl https://fiberpassbackend.vercel.app/fiber/node/status
 ```
 
-The existing direct CKB vault payout flow does not require the Fiber node. The node is required for live Fiber channel/app payment operations.
+FiberPass scheduled payouts are Fiber-only in the product flow. The node is required for live channel/app payment operations, while the vault lock remains the source of user liquidity.

@@ -21,6 +21,14 @@ export interface VaultPayoutResult {
   proofId: string;
 }
 
+export interface VaultLiquidityBridgeInput {
+  ownerWalletId: string;
+  sessionId: string;
+  nodeFundingAddress: string;
+  amountMinor: number;
+  currency: string;
+}
+
 export interface VaultPayoutReadiness {
   ready: boolean;
   code?: string;
@@ -332,7 +340,16 @@ function selectVaultCells(input: { cells: Cell[]; amountMinor: bigint; minChange
   throw new ApiError(402, 'VAULT_LIVE_CAPACITY_INSUFFICIENT', 'Vault live cells do not have enough spendable CKB for this payout plus change capacity.');
 }
 
-export async function executeVaultPayout(input: VaultPayoutInput): Promise<VaultPayoutResult> {
+async function executeVaultPlainTransfer(input: {
+  ownerWalletId: string;
+  recipientAddress: string;
+  amountMinor: number;
+  currency: string;
+  minimumErrorCode: string;
+  minimumErrorLabel: string;
+  failureCode: string;
+  failureLabel: string;
+}): Promise<VaultPayoutResult> {
   const runtime = getVaultRuntimeConfig();
   if (!runtime.configured) {
     throw new ApiError(503, 'VAULT_PAYOUT_NOT_CONFIGURED', 'Direct vault payouts require the deployed FiberPass vault configuration.');
@@ -349,8 +366,8 @@ export async function executeVaultPayout(input: VaultPayoutInput): Promise<Vault
   if (input.amountMinor < minRecipientMinor) {
     throw new ApiError(
       400,
-      'CKB_PAYOUT_BELOW_CELL_MINIMUM',
-      'Direct CKB payouts to a wallet must be at least ' + fromMinorUnits(minRecipientMinor, input.currency).toLocaleString('en-US') + ' ' + input.currency + '.'
+      input.minimumErrorCode,
+      input.minimumErrorLabel + ' must be at least ' + fromMinorUnits(minRecipientMinor, input.currency).toLocaleString('en-US') + ' ' + input.currency + '.'
     );
   }
 
@@ -409,7 +426,33 @@ export async function executeVaultPayout(input: VaultPayoutInput): Promise<Vault
     return { provider: 'ckb-vault', network: env.FIBER_NETWORK, proofId: txHash };
   } catch (error) {
     if (error instanceof ApiError) throw error;
-    const message = error instanceof Error && error.message ? error.message : 'CKB vault payout transaction failed.';
-    throw new ApiError(502, 'VAULT_PAYOUT_TX_FAILED', message);
+    const message = error instanceof Error && error.message ? error.message : input.failureLabel + ' transaction failed.';
+    throw new ApiError(502, input.failureCode, message);
   }
+}
+
+export async function executeVaultPayout(input: VaultPayoutInput): Promise<VaultPayoutResult> {
+  return executeVaultPlainTransfer({
+    ownerWalletId: input.ownerWalletId,
+    recipientAddress: input.recipientAddress,
+    amountMinor: input.amountMinor,
+    currency: input.currency,
+    minimumErrorCode: 'CKB_PAYOUT_BELOW_CELL_MINIMUM',
+    minimumErrorLabel: 'Direct CKB payouts to a wallet',
+    failureCode: 'VAULT_PAYOUT_TX_FAILED',
+    failureLabel: 'CKB vault payout'
+  });
+}
+
+export async function executeVaultLiquidityBridge(input: VaultLiquidityBridgeInput): Promise<VaultPayoutResult> {
+  return executeVaultPlainTransfer({
+    ownerWalletId: input.ownerWalletId,
+    recipientAddress: input.nodeFundingAddress,
+    amountMinor: input.amountMinor,
+    currency: input.currency,
+    minimumErrorCode: 'FIBER_LIQUIDITY_BELOW_CELL_MINIMUM',
+    minimumErrorLabel: 'Fiber liquidity bridge transfers',
+    failureCode: 'FIBER_LIQUIDITY_BRIDGE_TX_FAILED',
+    failureLabel: 'Fiber liquidity bridge'
+  });
 }

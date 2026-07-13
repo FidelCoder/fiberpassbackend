@@ -89,7 +89,7 @@ export async function sendRecipientInviteEmail(input: RecipientInviteInput): Pro
   const expectedPaymentAt = formatDate(input.expectedPaymentAt, input.timeZone);
   const expiresAt = formatDate(input.expiresAt, input.timeZone);
   const rows = detailRow('Payer / contractor', input.payerName) + detailRow('Pass', input.passName) + detailRow('Amount', amount) + detailRow('Expected payment', expectedPaymentAt) + detailRow('Magic link expires', expiresAt) + (input.reference ? detailRow('Reference', input.reference) : '') + (input.conditionSummary ? detailRow('Condition', input.conditionSummary) : '');
-  const body = '<p style="margin:0 0 18px;color:#d7ddeb;font-size:15px;line-height:1.7;">Hi ' + escapeHtml(input.recipientName) + ', ' + escapeHtml(input.payerName) + ' added you to a FiberPass payment. Add a Fiber invoice/payment request or CKB wallet address before the link expires so the payout can be released automatically.</p>' +
+  const body = '<p style="margin:0 0 18px;color:#d7ddeb;font-size:15px;line-height:1.7;">Hi ' + escapeHtml(input.recipientName) + ', ' + escapeHtml(input.payerName) + ' added you to a FiberPass payment. Add a Fiber invoice/payment request before the link expires so the payout can be released automatically through Fiber Network.</p>' +
     '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-top:1px solid #2a3140;border-bottom:1px solid #2a3140;margin:18px 0;">' + rows + '</table>' +
     '<a href="' + escapeHtml(input.claimUrl) + '" style="display:inline-block;background:#b0c6ff;color:#10131a;text-decoration:none;font-weight:800;border-radius:12px;padding:13px 18px;font-size:13px;">Add payment details</a>' +
     '<p style="margin:18px 0 0;color:#9aa4b8;font-size:12px;line-height:1.6;">If the button does not work, open this link: ' + escapeHtml(input.claimUrl) + '</p>';
@@ -97,7 +97,7 @@ export async function sendRecipientInviteEmail(input: RecipientInviteInput): Pro
     to: input.to,
     subject: 'FiberPass details for ' + input.passName,
     text: 'Hi ' + input.recipientName + ', ' + input.payerName + ' added you to ' + input.passName + '. Amount: ' + amount + '. Expected payment: ' + expectedPaymentAt + '. Link expires: ' + expiresAt + '. Add your payment details: ' + input.claimUrl,
-    html: emailShell('Payment details needed', 'Add your CKB wallet to receive this FiberPass transfer.', body),
+    html: emailShell('Payment details needed', 'Add your Fiber invoice/payment request to receive this FiberPass transfer.', body),
     headers: {
       'X-FiberPass-Notification': 'recipient-invite'
     }

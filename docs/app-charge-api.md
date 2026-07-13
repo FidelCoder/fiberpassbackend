@@ -7,7 +7,7 @@ Apps should charge a pass through the backend, never directly from the browser.
 - Send an app API key.
 - Send an idempotency key for every charge.
 - Send a Fiber payment request when using the Fiber rail.
-- Use direct vault payout only for scheduled invoice/recipient flows owned by FiberPass.
+- Scheduled invoice/recipient payouts are Fiber-only and require Fiber invoice/payment requests; FiberPass bridges reserved vault liquidity into channel liquidity when needed.
 
 ## Receipt Fields
 
