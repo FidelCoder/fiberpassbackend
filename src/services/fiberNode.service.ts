@@ -99,6 +99,8 @@ type FiberNodeReadinessInput = {
 
 const PEER_METHODS = ['list_peers', 'peers', 'connected_peers'];
 const CHANNEL_METHODS = ['list_channels', 'channels'];
+const DEFAULT_PARAM_VARIANTS: unknown[][] = [[]];
+const CHANNEL_PARAM_VARIANTS: unknown[][] = [[], [{}], [{ limit: 100 }], [{ limit: '0x64' }]];
 const ACTIVE_CHANNEL_STATUSES = new Set(['active', 'open', 'opened', 'normal', 'ready', 'channel_ready', 'usable']);
 const OUTBOUND_CAPACITY_KEYS = [
   'outbound_capacity',
@@ -264,19 +266,35 @@ async function callFiberRpc(method: string, params: unknown[] = []): Promise<unk
   return payload?.result;
 }
 
-async function probeFiberRpcMethods(methods: string[]): Promise<RpcProbeResult> {
+async function probeFiberRpcMethods(methods: string[], paramVariants = DEFAULT_PARAM_VARIANTS): Promise<RpcProbeResult> {
   const unavailable: string[] = [];
+  let lastParamError: { method: string; error: string; code?: number } | undefined;
+
   for (const method of methods) {
-    try {
-      return { status: 'available', method, raw: await callFiberRpc(method) };
-    } catch (error) {
-      if (isMethodUnavailable(error)) {
-        unavailable.push(method);
-        continue;
+    for (const params of paramVariants) {
+      try {
+        return { status: 'available', method, raw: await callFiberRpc(method, params) };
+      } catch (error) {
+        if (isMethodUnavailable(error)) {
+          unavailable.push(method);
+          break;
+        }
+
+        const code = rpcErrorCode(error);
+        const message = rpcErrorMessage(error);
+        if (code === -32602 || /invalid params/i.test(message)) {
+          lastParamError = { method, error: message, code };
+          continue;
+        }
+        return { status: 'error', method, error: message, code };
       }
-      return { status: 'error', method, error: rpcErrorMessage(error), code: rpcErrorCode(error) };
     }
   }
+
+  if (lastParamError) {
+    return { status: 'error', method: lastParamError.method, error: lastParamError.error, code: lastParamError.code };
+  }
+
   return {
     status: 'unavailable',
     method: methods.join('|'),
@@ -501,7 +519,7 @@ export async function getFiberNodeReadiness(): Promise<FiberNodeReadinessDto> {
 
     const [peerProbe, channelProbe] = await Promise.all([
       probeFiberRpcMethods(PEER_METHODS),
-      probeFiberRpcMethods(CHANNEL_METHODS)
+      probeFiberRpcMethods(CHANNEL_METHODS, CHANNEL_PARAM_VARIANTS)
     ]);
     const peers = summarizeFiberNodePeers(peerProbe);
     const channels = summarizeFiberNodeChannels(channelProbe);
