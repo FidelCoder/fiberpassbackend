@@ -1830,6 +1830,7 @@ export async function chargeSession(input: ChargeSessionInput): Promise<Sessions
 
 interface DueSessionPayoutWorkerInput {
   limit?: number;
+  ownerWalletId?: string;
 }
 
 export interface DueSessionPayoutWorkerResult {
@@ -2059,7 +2060,7 @@ export async function runDueSessionPayouts(input: DueSessionPayoutWorkerInput = 
     );
   }
 
-  const dueSessions = await SessionModel.find({
+  const sessionQuery: Record<string, unknown> = {
     status: "active",
     paymentPurpose: { $in: ["subscription", "scheduled_release", "recurring_release"] },
     nextReleaseAt: { $lte: new Date() },
@@ -2068,7 +2069,10 @@ export async function runDueSessionPayouts(input: DueSessionPayoutWorkerInput = 
         $or: recipientStatusFilters
       }
     }
-  }).sort({ nextReleaseAt: 1, createdAt: 1 }).limit(limit);
+  };
+  if (input.ownerWalletId) sessionQuery.ownerWalletId = input.ownerWalletId;
+
+  const dueSessions = await SessionModel.find(sessionQuery).sort({ nextReleaseAt: 1, createdAt: 1 }).limit(limit);
 
   const result: DueSessionPayoutWorkerResult = {
     scanned: dueSessions.length,

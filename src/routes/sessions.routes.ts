@@ -15,6 +15,7 @@ import {
   isValidPaymentPurpose,
   isValidReleaseCadence,
   resendRecipientInvites,
+  runDueSessionPayouts,
   revokeSession,
   settleSession,
   togglePauseSession,
@@ -89,7 +90,15 @@ sessionsRouter.get('/sessions/create-policy', requireAuth, asyncHandler(async (_
 
 sessionsRouter.get('/sessions', requireAuth, asyncHandler(async (request, response) => {
   const { walletId } = (request as AuthenticatedRequest).auth;
+  await runDueSessionPayouts({ ownerWalletId: walletId, limit: 5 }).catch(() => undefined);
   response.json(await getSessionsOverview(walletId));
+}));
+
+sessionsRouter.post('/sessions/payouts/sync', requireAuth, asyncHandler(async (request, response) => {
+  const { walletId } = (request as AuthenticatedRequest).auth;
+  const payoutSync = await runDueSessionPayouts({ ownerWalletId: walletId, limit: 25 });
+  const overview = await getSessionsOverview(walletId);
+  response.json({ ...overview, payoutSync });
 }));
 
 sessionsRouter.post('/sessions', requireAuth, asyncHandler(async (request, response) => {

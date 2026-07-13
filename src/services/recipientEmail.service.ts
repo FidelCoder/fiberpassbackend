@@ -95,9 +95,12 @@ export async function sendRecipientInviteEmail(input: RecipientInviteInput): Pro
     '<p style="margin:18px 0 0;color:#9aa4b8;font-size:12px;line-height:1.6;">If the button does not work, open this link: ' + escapeHtml(input.claimUrl) + '</p>';
   await sendEmail({
     to: input.to,
-    subject: 'FiberPass payment details needed: ' + amount,
+    subject: 'FiberPass details for ' + input.passName,
     text: 'Hi ' + input.recipientName + ', ' + input.payerName + ' added you to ' + input.passName + '. Amount: ' + amount + '. Expected payment: ' + expectedPaymentAt + '. Link expires: ' + expiresAt + '. Add your CKB wallet: ' + input.claimUrl,
-    html: emailShell('Payment details needed', 'Add your CKB wallet to receive a FiberPass payout.', body)
+    html: emailShell('Payment details needed', 'Add your CKB wallet to receive this FiberPass transfer.', body),
+    headers: {
+      'X-FiberPass-Notification': 'recipient-invite'
+    }
   });
 }
 
@@ -112,8 +115,11 @@ export async function sendRecipientPayoutReceiptEmail(input: PayoutReceiptInput)
     '<div style="background:#10131a;border:1px solid #2a3140;border-radius:12px;padding:14px;margin-top:16px;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:0.12em;color:#9aa4b8;font-weight:800;">Transaction hash</div><div style="font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:#ffffff;font-size:12px;line-height:1.6;word-break:break-all;margin-top:6px;">' + escapeHtml(input.txHash) + '</div></div>' + explorerButton;
   await sendEmail({
     to: input.to,
-    subject: 'FiberPass payout sent: ' + amount,
+    subject: 'FiberPass receipt for ' + input.passName,
     text: 'Hi ' + input.recipientName + ', your FiberPass payout from ' + input.payerName + ' was sent. Amount: ' + amount + '. Paid at: ' + paidAt + '. Transaction: ' + input.txHash + (explorer ? '. Explorer: ' + explorer : ''),
-    html: emailShell('Payout sent', 'Your FiberPass payout was sent successfully.', body)
+    html: emailShell('Payout sent', 'Your FiberPass transfer was sent successfully.', body),
+    headers: {
+      'X-FiberPass-Notification': 'payout-receipt'
+    }
   });
 }

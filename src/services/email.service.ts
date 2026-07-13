@@ -7,6 +7,8 @@ export interface EmailMessage {
   subject: string;
   text: string;
   html: string;
+  replyTo?: string;
+  headers?: Record<string, string>;
 }
 
 let transporter: Transporter | undefined;
@@ -40,9 +42,16 @@ function getTransporter(): Transporter {
 export async function sendEmail(message: EmailMessage): Promise<void> {
   await getTransporter().sendMail({
     from: { name: env.EMAIL_FROM_NAME, address: env.EMAIL_FROM_ADDRESS },
+    replyTo: message.replyTo ?? env.EMAIL_FROM_ADDRESS,
+    sender: env.EMAIL_FROM_ADDRESS,
     to: message.to,
     subject: message.subject,
     text: message.text,
-    html: message.html
+    html: message.html,
+    headers: {
+      'X-Auto-Response-Suppress': 'All',
+      'X-FiberPass-Transactional': 'true',
+      ...(message.headers ?? {})
+    }
   });
 }
