@@ -22,6 +22,12 @@ const envSchema = z.object({
   FIBER_RPC_URL: z.string().min(1).default('http://127.0.0.1:8227'),
   FIBER_API_KEY: z.string().optional().default(''),
   FIBER_PEER_ID: z.string().optional().default(''),
+  FIBER_NODE_MIN_PEERS: z.coerce.number().int().nonnegative().default(1),
+  FIBER_NODE_MIN_ACTIVE_CHANNELS: z.coerce.number().int().nonnegative().default(1),
+  FIBER_NODE_MIN_OUTBOUND_LIQUIDITY_CKB: z.coerce.number().nonnegative().default(0.01),
+  FIBER_TARGET_PEER_IDS: z.string().optional().default(''),
+  FIBER_TEST_CHANNEL_AMOUNT_CKB: z.coerce.number().positive().default(0.01),
+  FIBERPASS_DAILY_SESSION_SPEND_LIMIT_CKB: z.coerce.number().positive().default(100000),
   FIBERPASS_TREASURY_ADDRESS: z.string().optional().default(''),
   FIBERPASS_VAULT_CODE_HASH: z.string().optional().default(''),
   FIBERPASS_VAULT_HASH_TYPE: z.enum(['data', 'type', 'data1', 'data2']).default('type'),
@@ -65,7 +71,43 @@ const envSchema = z.object({
       path: ['FRONTEND_ORIGIN'],
       message: 'FRONTEND_ORIGIN must be an explicit allowlist in production.'
     });
-  }});
+  }
+
+  if (env.NODE_ENV === 'production') {
+    const localHosts = new Set(['127.0.0.1', 'localhost', '0.0.0.0']);
+    const isLocalUrl = (value: string): boolean => {
+      try {
+        return localHosts.has(new URL(value).hostname);
+      } catch {
+        return false;
+      }
+    };
+
+    if (isLocalUrl(env.FIBER_RPC_URL)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['FIBER_RPC_URL'],
+        message: 'FIBER_RPC_URL must point to a reachable HTTPS Fiber RPC gateway in production.'
+      });
+    }
+
+    if (isLocalUrl(env.PUBLIC_APP_URL)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['PUBLIC_APP_URL'],
+        message: 'PUBLIC_APP_URL must be the deployed frontend URL in production.'
+      });
+    }
+
+    if (!env.CRON_SECRET.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['CRON_SECRET'],
+        message: 'CRON_SECRET is required in production for worker and operator endpoints.'
+      });
+    }
+  }
+});
 
 export const env = envSchema.parse(process.env);
 export const isProduction = env.NODE_ENV === 'production';

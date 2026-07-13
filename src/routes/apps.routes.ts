@@ -41,6 +41,10 @@ const chargeSchema = z.object({
   sessionId: z.string().trim().min(1),
   amount: z.coerce.number().positive().max(100000),
   type: z.string().trim().min(1).max(120).default('App charge'),
+  idempotencyKey: z.string().trim().min(8).max(160),
+  serviceReference: z.string().trim().max(160).optional().or(z.literal('')),
+  paymentRequest: z.string().trim().max(4000).optional().or(z.literal('')),
+  fiberInvoice: z.string().trim().max(4000).optional().or(z.literal('')),
   metadata: z.record(z.string(), z.unknown()).optional()
 });
 
@@ -291,11 +295,21 @@ appsRouter.get('/apps/:appId/charges', requireAuth, asyncHandler(async (request,
 appsRouter.post('/apps/:appId/charges', appChargeRateLimit, requireAppApiKeyWithScopes(['charges:create']), asyncHandler(async (request, response) => {
   const { appId, keyId, serviceAddress } = (request as AppAuthenticatedRequest).appAuth;
   const payload = chargeSchema.parse(request.body);
+  const paymentRequest = payload.paymentRequest || payload.fiberInvoice || undefined;
+  const metadata = {
+    ...(payload.metadata ?? {}),
+    idempotencyKey: payload.idempotencyKey,
+    ...(payload.serviceReference ? { serviceReference: payload.serviceReference } : {}),
+    ...(paymentRequest ? { fiberInvoice: paymentRequest, paymentRequest } : {})
+  };
   const overview = await chargeSession({
     sessionId: payload.sessionId,
     amount: payload.amount,
     type: payload.type,
-    metadata: payload.metadata,
+    idempotencyKey: payload.idempotencyKey,
+    serviceReference: payload.serviceReference || undefined,
+    paymentRequest,
+    metadata,
     appId,
     apiKeyId: keyId,
     appServiceAddress: serviceAddress

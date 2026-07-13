@@ -87,6 +87,7 @@ assert.notEqual(hashFiberInvoice('invoice-one'), hashFiberInvoice('invoice-two')
 
 
 assert.equal(isFatalPaymentJobError('SESSION_LIMIT_EXCEEDED'), true);
+assert.equal(isFatalPaymentJobError('DAILY_SESSION_LIMIT_EXCEEDED'), true);
 
 assert.equal(isFatalPaymentJobError('SESSION_NOT_CHARGEABLE'), true);
 assert.equal(isFatalPaymentJobError('SESSION_EXPIRED'), true);

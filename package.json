@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx src/tests/money.test.ts && tsx src/tests/fiberAddress.test.ts && tsx src/tests/vault.test.ts && tsx src/tests/ckbChain.test.ts && tsx src/tests/fiberProvider.rpc.test.ts && tsx src/tests/automationFlow.test.ts && tsx src/tests/appPermissions.test.ts",
+    "test": "tsx src/tests/money.test.ts && tsx src/tests/fiberAddress.test.ts && tsx src/tests/vault.test.ts && tsx src/tests/ckbChain.test.ts && tsx src/tests/fiberProvider.rpc.test.ts && tsx src/tests/fiberAdapter.test.ts && tsx src/tests/fiberNodeReadiness.test.ts && tsx src/tests/reconciliation.test.ts && tsx src/tests/automationFlow.test.ts && tsx src/tests/appPermissions.test.ts",
     "vault:build": "node lockscripts/fiberpass-vault-lock/scripts/build-and-hash.mjs",
     "vault:deploy:testnet": "node lockscripts/fiberpass-vault-lock/scripts/deploy-testnet.mjs",
     "worker:payments": "tsx src/workers/paymentWorker.ts",
@@ -21,7 +21,9 @@
     "fiber:node:up:gateway": "node infra/fiber-node/render-config.mjs && docker compose --env-file infra/fiber-node/.env -f infra/fiber-node/docker-compose.yml up -d",
     "fiber:node:down": "docker compose --env-file infra/fiber-node/.env -f infra/fiber-node/docker-compose.yml down",
     "fiber:node:logs": "docker compose --env-file infra/fiber-node/.env -f infra/fiber-node/docker-compose.yml logs -f fiber-node",
-    "fiber:node:status": "node scripts/fiber-node-status.mjs"
+    "fiber:node:status": "node scripts/fiber-node-status.mjs",
+    "fiber:live-e2e": "node scripts/fiber-live-e2e.mjs",
+    "demo:readiness": "node scripts/demo-readiness.mjs"
   },
   "dependencies": {
     "@ckb-lumos/lumos": "^0.23.0",

@@ -69,6 +69,12 @@ export interface AppChargeAttemptDto {
   provider?: string;
   network?: string;
   proofId?: string;
+  proofType?: string;
+  executionLayer?: string;
+  reserveStatus?: string;
+  idempotencyKey?: string;
+  serviceReference?: string;
+  paymentRequestHash?: string;
   createdAt: string;
 }
 
@@ -174,6 +180,12 @@ export function toAppChargeAttemptDto(attempt: ChargeAttemptRecord & { createdAt
     provider: attempt.provider ?? undefined,
     network: attempt.network ?? undefined,
     proofId: attempt.proofId ?? undefined,
+    proofType: attempt.proofType ?? undefined,
+    executionLayer: attempt.executionLayer ?? undefined,
+    reserveStatus: attempt.reserveStatus ?? undefined,
+    idempotencyKey: attempt.idempotencyKey ?? undefined,
+    serviceReference: attempt.serviceReference ?? undefined,
+    paymentRequestHash: attempt.paymentRequestHash ?? undefined,
     createdAt: (attempt.createdAt ?? new Date()).toISOString()
   };
 }

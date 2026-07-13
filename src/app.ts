@@ -14,6 +14,7 @@ import { fiberRouter } from './routes/fiber.routes.js';
 import { sessionsRouter } from './routes/sessions.routes.js';
 import { walletRouter } from './routes/wallet.routes.js';
 import { runPaymentWorkerOnce } from './services/automation.service.js';
+import { runReconciliationWorkerOnce } from './services/reconciliation.service.js';
 import { runDueSessionPayouts } from './services/session.service.js';
 import { runWebhookWorkerOnce } from './services/webhook.service.js';
 
@@ -53,7 +54,11 @@ async function runPaymentCron() {
     workerId: 'vercel-cron-webhook-worker',
     limit: env.WEBHOOK_WORKER_BATCH_SIZE
   });
-  return { scheduledPayouts, automationPayments, webhookDeliveries };
+  const reconciliation = await runReconciliationWorkerOnce({
+    workerId: 'vercel-cron-reconciliation-worker',
+    limit: env.PAYMENT_WORKER_BATCH_SIZE
+  });
+  return { scheduledPayouts, automationPayments, webhookDeliveries, reconciliation };
 }
 
 export const app = express();

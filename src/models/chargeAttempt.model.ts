@@ -2,6 +2,10 @@ import { Schema, model, type InferSchemaType } from 'mongoose';
 
 export const CHARGE_ATTEMPT_STATUSES = ['pending', 'succeeded', 'failed'] as const;
 export type ChargeAttemptStatus = (typeof CHARGE_ATTEMPT_STATUSES)[number];
+export const CHARGE_RESERVE_STATUSES = ['reserved', 'debited', 'released'] as const;
+export type ChargeReserveStatus = (typeof CHARGE_RESERVE_STATUSES)[number];
+export const CHARGE_EXECUTION_LAYERS = ['fiber', 'ckb-vault'] as const;
+export type ChargeExecutionLayer = (typeof CHARGE_EXECUTION_LAYERS)[number];
 
 const chargeAttemptSchema = new Schema(
   {
@@ -10,11 +14,14 @@ const chargeAttemptSchema = new Schema(
     appId: { type: String, index: true },
     apiKeyId: { type: String, index: true },
     ownerWalletId: { type: String, index: true },
+    idempotencyKey: { type: String, trim: true },
+    serviceReference: { type: String, trim: true },
     amount: { type: Number, required: true, min: 0 },
     amountMinor: { type: Number, min: 0 },
     currency: { type: String, required: true, default: 'CKB' },
     type: { type: String, required: true, trim: true },
     status: { type: String, enum: CHARGE_ATTEMPT_STATUSES, required: true, default: 'pending', index: true },
+    reserveStatus: { type: String, enum: CHARGE_RESERVE_STATUSES, required: true, default: 'reserved', index: true },
     failureCode: { type: String, trim: true },
     failureMessage: { type: String, trim: true },
     resultingSpent: { type: Number, min: 0 },
@@ -24,6 +31,9 @@ const chargeAttemptSchema = new Schema(
     provider: { type: String, trim: true },
     network: { type: String, trim: true },
     proofId: { type: String, trim: true },
+    proofType: { type: String, trim: true },
+    executionLayer: { type: String, enum: CHARGE_EXECUTION_LAYERS, required: true, default: 'fiber' },
+    paymentRequestHash: { type: String, trim: true },
     metadata: { type: Schema.Types.Mixed }
   },
   {
@@ -35,6 +45,16 @@ const chargeAttemptSchema = new Schema(
 chargeAttemptSchema.index({ sessionId: 1, createdAt: -1 });
 chargeAttemptSchema.index({ appId: 1, createdAt: -1 });
 chargeAttemptSchema.index({ ownerWalletId: 1, createdAt: -1 });
+chargeAttemptSchema.index(
+  { appId: 1, idempotencyKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      appId: { $type: 'string' },
+      idempotencyKey: { $type: 'string' }
+    }
+  }
+);
 
 export type ChargeAttemptRecord = InferSchemaType<typeof chargeAttemptSchema>;
 export const ChargeAttemptModel = model('ChargeAttempt', chargeAttemptSchema);

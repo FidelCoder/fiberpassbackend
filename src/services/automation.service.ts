@@ -524,9 +524,34 @@ function paymentJobIdempotencyKey(invoice: InvoiceRecord): string | undefined {
 function ensureInvoicePaymentRequest(invoice: InvoiceRecord): string {
   const fiberInvoice = normalizeFiberInvoice(invoice.fiberInvoice ?? undefined);
   if (!fiberInvoice) {
-    throw new ApiError(400, 'FIBER_INVOICE_REQUIRED', 'A Fiber invoice/payment request is required before an invoice can be queued.');
+    throw new ApiError(400, 'FIBER_INVOICE_REQUIRED', 'A Fiber invoice/payment request is required before an app/API or subscription invoice can be queued.');
   }
   return fiberInvoice;
+}
+
+function metadataPaymentRail(metadata: unknown): 'fiber' | 'vault' | undefined {
+  const record = toMetadata(metadata);
+  const value = typeof record?.paymentRail === 'string' ? record.paymentRail.trim().toLowerCase() : '';
+  if (value === 'fiber' || value === 'vault') return value;
+  return undefined;
+}
+
+async function invoicePaymentRail(invoice: InvoiceRecord): Promise<'fiber' | 'vault'> {
+  const explicitRail = metadataPaymentRail(invoice.metadata);
+  if (explicitRail) return explicitRail;
+  if (normalizeFiberInvoice(invoice.fiberInvoice ?? undefined)) return 'fiber';
+
+  const session = await SessionModel.findOne({ publicId: invoice.sessionId, ownerWalletId: invoice.ownerWalletId })
+    .select('paymentPurpose')
+    .lean<Pick<SessionRecord, 'paymentPurpose'> | null>();
+  if (session?.paymentPurpose === 'scheduled_release' || session?.paymentPurpose === 'recurring_release') return 'vault';
+  return 'fiber';
+}
+
+async function ensureInvoiceQueueablePayment(invoice: InvoiceRecord): Promise<'fiber' | 'vault'> {
+  const rail = await invoicePaymentRail(invoice);
+  if (rail === 'fiber') ensureInvoicePaymentRequest(invoice);
+  return rail;
 }
 
 function failureFromError(error: unknown): { code: string; message: string } {
@@ -542,6 +567,7 @@ function failureFromError(error: unknown): { code: string; message: string } {
 const FATAL_PAYMENT_JOB_CODES = new Set([
   'APP_NOT_FOUND',
   'APP_SESSION_MISMATCH',
+  'DAILY_SESSION_LIMIT_EXCEEDED',
   'FIBER_INVOICE_REQUIRED',
   'SESSION_EXPIRED',
   'SESSION_LIMIT_EXCEEDED',
@@ -708,7 +734,7 @@ async function queueInvoiceDocument(actor: AutomationActor, invoice: InvoiceDocu
     throw new ApiError(409, 'INVOICE_FINAL', 'Paid or cancelled invoices cannot be queued again.');
   }
 
-  ensureInvoicePaymentRequest(invoice.toObject());
+  await ensureInvoiceQueueablePayment(invoice.toObject());
   const now = new Date();
   const job = await createOrResetPaymentJob(actor, invoice, now);
   const nextInvoiceStatus = job.status === 'processing' || job.status === 'locked' ? 'processing' : 'queued';
@@ -885,7 +911,8 @@ async function processPaymentJob(job: PaymentJobDocument, workerId: string): Pro
       throw new ApiError(404, 'RECIPIENT_NOT_FOUND', 'Payment job recipient was not found.');
     }
 
-    const fiberInvoice = ensureInvoicePaymentRequest(invoice.toObject());
+    const paymentRail = await invoicePaymentRail(invoice.toObject());
+    const fiberInvoice = paymentRail === 'fiber' ? ensureInvoicePaymentRequest(invoice.toObject()) : undefined;
     const invoiceMetadata = toMetadata(invoice.metadata) ?? {};
     const jobMetadata = toMetadata(job.metadata) ?? {};
     const queuedByKeyId = typeof jobMetadata.queuedByKeyId === 'string' && jobMetadata.queuedByKeyId.trim()
@@ -903,11 +930,18 @@ async function processPaymentJob(job: PaymentJobDocument, workerId: string): Pro
       appId: invoice.appId,
       apiKeyId: queuedByKeyId,
       appServiceAddress: app.serviceAddress,
+      idempotencyKey: job.idempotencyKey ?? job.jobId,
+      serviceReference: invoice.externalReference ?? invoice.invoiceId,
+      paymentRequest: fiberInvoice,
       metadata: {
         ...invoiceMetadata,
-        fiberInvoice,
+        paymentRail,
+        ...(fiberInvoice ? { fiberInvoice } : {}),
+        ...(paymentRail === 'vault' ? { directVaultPayout: true } : {}),
         automationInvoiceId: invoice.invoiceId,
         automationJobId: job.jobId,
+        idempotencyKey: job.idempotencyKey ?? job.jobId,
+        serviceReference: invoice.externalReference ?? invoice.invoiceId,
         recipientId: invoice.recipientId,
         recipientAddress: recipient.serviceAddress,
         recipientName: recipient.name,
@@ -1292,9 +1326,10 @@ export async function queueInvoiceBatch(actor: AutomationActor, batchId: string)
     throw new ApiError(400, 'PAYMENT_BATCH_EMPTY', 'Payment batch has no invoices to queue.');
   }
 
-  const missingInvoice = invoices.find((invoice) => invoice.status !== 'paid' && invoice.status !== 'cancelled' && !normalizeFiberInvoice(invoice.fiberInvoice ?? undefined));
-  if (missingInvoice) {
-    throw new ApiError(400, 'FIBER_INVOICE_REQUIRED', 'Every queued batch invoice must include a Fiber invoice/payment request.');
+  for (const invoice of invoices) {
+    if (invoice.status !== 'paid' && invoice.status !== 'cancelled') {
+      await ensureInvoiceQueueablePayment(invoice.toObject());
+    }
   }
 
   batch.status = 'queued';

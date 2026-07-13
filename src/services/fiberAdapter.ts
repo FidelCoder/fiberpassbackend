@@ -1,28 +1,79 @@
-import { env } from '../config/env.js';
+import { createHash } from 'node:crypto';
+import { ApiError } from '../lib/errors.js';
+import { fiberProvider, type FiberProvider, type FiberProviderKind } from './fiberProvider.js';
 
-export interface FiberAuthorizeInput {
+const MIN_FIBER_PAYMENT_REQUEST_LENGTH = 16;
+
+export interface FiberPaymentExecutionInput {
   sessionId: string;
+  networkSessionId?: string;
   appAddress: string;
-  amount: number;
+  amountMinor: number;
   currency: string;
+  paymentRequest?: string;
+  metadata?: Record<string, unknown>;
 }
 
-export interface FiberSettlementInput {
-  sessionId: string;
-  amount: number;
-  currency: string;
-  reason: 'revoked' | 'settled' | 'expired';
+export interface FiberPaymentExecutionResult {
+  provider: FiberProviderKind;
+  network: string;
+  proofId: string;
+  proofType: 'fiber_payment';
+  paymentRequestHash: string;
+  raw?: unknown;
+}
+
+export function normalizeFiberPaymentRequest(value?: string): string {
+  const paymentRequest = value?.trim() ?? '';
+  if (!paymentRequest) {
+    throw new ApiError(400, 'FIBER_INVOICE_REQUIRED', 'A Fiber invoice/payment request is required before an app can charge this FiberPass.');
+  }
+  if (paymentRequest.length < MIN_FIBER_PAYMENT_REQUEST_LENGTH) {
+    throw new ApiError(400, 'FIBER_INVOICE_INVALID', 'Fiber payment request is too short to execute.');
+  }
+  return paymentRequest;
+}
+
+export function hashFiberPaymentRequest(value: string): string {
+  return createHash('sha256').update(normalizeFiberPaymentRequest(value)).digest('hex');
 }
 
 export class FiberAdapter {
-  async authorizeCharge(input: FiberAuthorizeInput): Promise<{ authorized: true; network: string }> {
-    void input;
-    return { authorized: true, network: env.FIBER_NETWORK };
+  constructor(private readonly provider: FiberProvider = fiberProvider) {}
+
+  async executePayment(input: FiberPaymentExecutionInput): Promise<FiberPaymentExecutionResult> {
+    const paymentRequest = normalizeFiberPaymentRequest(input.paymentRequest);
+    try {
+      const result = await this.provider.authorizeCharge({
+        sessionId: input.sessionId,
+        networkSessionId: input.networkSessionId,
+        appAddress: input.appAddress,
+        amountMinor: input.amountMinor,
+        currency: input.currency,
+        paymentRequest,
+        metadata: {
+          ...(input.metadata ?? {}),
+          fiberInvoice: paymentRequest
+        }
+      });
+
+      return {
+        provider: result.provider,
+        network: result.network,
+        proofId: result.proofId,
+        proofType: 'fiber_payment',
+        paymentRequestHash: hashFiberPaymentRequest(paymentRequest),
+        raw: result.raw
+      };
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      const message = error instanceof Error ? error.message : 'Fiber payment failed.';
+      throw new ApiError(502, 'FIBER_PAYMENT_FAILED', message);
+    }
   }
 
-  async settleSession(input: FiberSettlementInput): Promise<{ settled: true; network: string }> {
-    void input;
-    return { settled: true, network: env.FIBER_NETWORK };
+  async getNodeStatus(sessionId = 'node_info') {
+    return this.provider.getStatus(sessionId);
   }
 }
 
