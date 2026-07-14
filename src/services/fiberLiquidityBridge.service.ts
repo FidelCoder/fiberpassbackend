@@ -1,3 +1,4 @@
+import { env } from '../config/env.js';
 import { ApiError } from '../lib/errors.js';
 import { fromMinorUnits } from '../lib/money.js';
 import { SessionModel } from '../models/session.model.js';
@@ -64,6 +65,66 @@ function channelOpenStillFresh(requestedAt?: Date | string): boolean {
   return Number.isFinite(timestamp) && timestamp > Date.now() - CHANNEL_OPEN_WAIT_MS;
 }
 
+type PendingChannelOpenProbe = { hasOpenPending: boolean; failureDetail?: string };
+
+function bridgeRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function bridgeString(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return undefined;
+}
+
+function bridgeChannels(raw: unknown): Record<string, unknown>[] {
+  const record = bridgeRecord(raw);
+  const channels = Array.isArray(record.channels) ? record.channels : Array.isArray(raw) ? raw : [];
+  return channels.map((channel) => bridgeRecord(channel));
+}
+
+function pendingChannelStateText(channel: Record<string, unknown>): string {
+  const state = bridgeRecord(channel.state);
+  return [
+    bridgeString(state, ['state_name', 'stateName']),
+    bridgeString(state, ['state_flags', 'stateFlags']),
+    bridgeString(channel, ['failure_detail', 'failureDetail'])
+  ].filter(Boolean).join(' ');
+}
+
+function isFailedPendingChannel(channel: Record<string, unknown>): boolean {
+  const text = pendingChannelStateText(channel).toLowerCase();
+  return text.includes('funding_aborted') || text.includes('failed') || text.includes('closed') || text.includes('aborted');
+}
+
+async function inspectPendingChannelOpen(): Promise<PendingChannelOpenProbe> {
+  const response = await fetch(env.FIBER_RPC_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(env.FIBER_API_KEY ? { Authorization: 'Bearer ' + env.FIBER_API_KEY } : {})
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'list_channels', params: [{ only_pending: true }] })
+  });
+
+  const payload = await response.json().catch(() => null) as { result?: unknown; error?: { message?: string } } | null;
+  if (!response.ok || payload?.error) return { hasOpenPending: true };
+
+  const channels = bridgeChannels(payload?.result);
+  if (channels.length === 0) return { hasOpenPending: false };
+
+  const openPending = channels.filter((channel) => !isFailedPendingChannel(channel));
+  if (openPending.length > 0) return { hasOpenPending: true };
+
+  return {
+    hasOpenPending: false,
+    failureDetail: pendingChannelStateText(channels[0]) || 'Fiber channel funding attempt was aborted.'
+  };
+}
+
+
 export async function ensureVaultFundedFiberLiquidity(input: FiberLiquidityBridgeInput): Promise<FiberLiquidityBridgeReadyResult> {
   const readiness = await getFiberNodeReadiness();
   if (!readiness.reachable) {
@@ -126,7 +187,14 @@ export async function ensureVaultFundedFiberLiquidity(input: FiberLiquidityBridg
   }
 
   if (state.fiberChannelOpenProofId && channelOpenStillFresh(state.fiberChannelOpenRequestedAt)) {
-    throw new ApiError(409, 'FIBER_CHANNEL_OPEN_PENDING', 'Fiber channel open is already submitted and waiting to become active. The payout worker will retry automatically.');
+    const pendingOpen = await inspectPendingChannelOpen();
+    if (pendingOpen.hasOpenPending) {
+      throw new ApiError(409, 'FIBER_CHANNEL_OPEN_PENDING', 'Fiber channel open is already submitted and waiting to become active. The payout worker will retry automatically.');
+    }
+    await setRecipientBridgeFields(input.sessionId, input.recipientIndex, {
+      fiberChannelOpenFailureDetail: pendingOpen.failureDetail,
+      fiberChannelOpenFailedAt: new Date()
+    });
   }
 
   try {
