@@ -213,12 +213,13 @@ export async function ensureVaultFundedFiberLiquidity(input: FiberLiquidityBridg
 
   if (state.fiberChannelOpenProofId) {
     const pendingOpen = await inspectPendingChannelOpen();
-    if (pendingOpen.hasOpenPending) {
+    const freshOpen = channelOpenStillFresh(state.fiberChannelOpenRequestedAt);
+    if (pendingOpen.hasOpenPending && freshOpen) {
       throw new ApiError(409, 'FIBER_CHANNEL_OPEN_PENDING', 'Fiber channel open is already submitted and waiting to become active. The payout worker will retry automatically.');
     }
-    if (channelOpenStillFresh(state.fiberChannelOpenRequestedAt) || pendingOpen.failureDetail) {
+    if (!freshOpen || pendingOpen.failureDetail) {
       await setRecipientBridgeFields(input.sessionId, input.recipientIndex, {
-        fiberChannelOpenFailureDetail: pendingOpen.failureDetail,
+        fiberChannelOpenFailureDetail: pendingOpen.failureDetail ?? 'Previous Fiber channel open did not activate within the wait window; opening additional liquidity.',
         fiberChannelOpenFailedAt: new Date()
       });
     }
