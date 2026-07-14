@@ -2097,7 +2097,8 @@ async function executeFiberExitPayout(input: {
     throw new ApiError(400, 'RECIPIENT_ADDRESS_REQUIRED', 'Fiber exit payouts require a recipient CKB wallet address.');
   }
 
-  const invoice = await ensureFiberExitInvoiceForWallet(input);
+  const keysendTargetPubkey = env.FIBER_EXIT_KEYSEND_TARGET_PUBKEY.trim();
+  const invoice = keysendTargetPubkey ? undefined : await ensureFiberExitInvoiceForWallet(input);
   let chargeAttempt = await latestScheduledPayoutAttempt(input.session.publicId, input.index);
   let fiberPaymentProofId = input.wallet.fiberExitPaymentProofId ?? chargeAttempt?.proofId;
 
@@ -2117,9 +2118,8 @@ async function executeFiberExitPayout(input: {
         recipientIndex: input.index,
         recipientName: input.wallet.name,
         recipientAddress,
-        fiberInvoice: invoice,
-        fiberExitInvoice: invoice,
-        fiberAllowSelfPayment: true,
+        ...(invoice ? { fiberInvoice: invoice, fiberExitInvoice: invoice, fiberAllowSelfPayment: true } : {}),
+        ...(keysendTargetPubkey ? { fiberKeysendTargetPubkey: keysendTargetPubkey } : {}),
         fiberPaymentTimeoutSeconds: 45,
         paymentReference: input.session.paymentReference,
         paymentPurpose: input.session.paymentPurpose

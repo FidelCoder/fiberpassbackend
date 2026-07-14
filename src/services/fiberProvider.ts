@@ -127,6 +127,26 @@ export class RpcFiberProvider implements FiberProvider {
   }
 
   async authorizeCharge(input: FiberAuthorizeChargeInput): Promise<FiberChargeResult> {
+    const keysendTargetPubkey = typeof input.metadata?.fiberKeysendTargetPubkey === 'string'
+      ? input.metadata.fiberKeysendTargetPubkey.trim()
+      : '';
+    if (keysendTargetPubkey) {
+      const raw = await this.rpc('send_payment', [{
+        target_pubkey: keysendTargetPubkey,
+        amount: fiberRpcHexQuantity(input.amountMinor),
+        keysend: true,
+        ...(typeof input.metadata?.fiberPaymentTimeoutSeconds === 'number' ? { timeout: fiberRpcHexQuantity(input.metadata.fiberPaymentTimeoutSeconds) } : {}),
+        ...(typeof input.metadata?.fiberMaxFeeAmountMinor === 'number' ? { max_fee_amount: fiberRpcHexQuantity(input.metadata.fiberMaxFeeAmountMinor) } : {})
+      }]);
+      return {
+        provider: this.kind,
+        network: this.network,
+        authorized: true,
+        proofId: String((raw as { payment_hash?: unknown })?.payment_hash ?? (raw as { hash?: unknown })?.hash ?? (raw as { payment_preimage?: unknown })?.payment_preimage ?? ''),
+        raw
+      };
+    }
+
     const invoice = input.paymentRequest ?? (typeof input.metadata?.fiberInvoice === 'string' ? input.metadata.fiberInvoice : '');
     if (!invoice) {
       throw new Error('A Fiber invoice/payment request is required for Fiber charges.');

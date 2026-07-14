@@ -27,6 +27,7 @@ const envSchema = z.object({
   FIBER_NODE_MIN_OUTBOUND_LIQUIDITY_CKB: z.coerce.number().nonnegative().default(0.01),
   FIBER_TARGET_PEER_IDS: z.string().optional().default(''),
   FIBER_TEST_CHANNEL_AMOUNT_CKB: z.coerce.number().positive().default(0.01),
+  FIBER_EXIT_KEYSEND_TARGET_PUBKEY: z.string().optional().default(''),
   FIBER_EXIT_SETTLEMENT_PRIVATE_KEY: z.string().optional().default(''),
   FIBER_NODE_CKB_PRIVATE_KEY: z.string().optional().default(''),
   FIBER_EXIT_SETTLEMENT_LOCK_HASH: z.string().optional().default(''),

@@ -19,7 +19,7 @@ export interface FiberPaymentExecutionResult {
   network: string;
   proofId: string;
   proofType: 'fiber_payment';
-  paymentRequestHash: string;
+  paymentRequestHash?: string;
   raw?: unknown;
 }
 
@@ -42,7 +42,10 @@ export class FiberAdapter {
   constructor(private readonly provider: FiberProvider = fiberProvider) {}
 
   async executePayment(input: FiberPaymentExecutionInput): Promise<FiberPaymentExecutionResult> {
-    const paymentRequest = normalizeFiberPaymentRequest(input.paymentRequest);
+    const keysendTargetPubkey = typeof input.metadata?.fiberKeysendTargetPubkey === 'string'
+      ? input.metadata.fiberKeysendTargetPubkey.trim()
+      : '';
+    const paymentRequest = keysendTargetPubkey ? undefined : normalizeFiberPaymentRequest(input.paymentRequest);
     try {
       const result = await this.provider.authorizeCharge({
         sessionId: input.sessionId,
@@ -53,7 +56,7 @@ export class FiberAdapter {
         paymentRequest,
         metadata: {
           ...(input.metadata ?? {}),
-          fiberInvoice: paymentRequest
+          ...(paymentRequest ? { fiberInvoice: paymentRequest } : {})
         }
       });
 
@@ -62,7 +65,7 @@ export class FiberAdapter {
         network: result.network,
         proofId: result.proofId,
         proofType: 'fiber_payment',
-        paymentRequestHash: hashFiberPaymentRequest(paymentRequest),
+        paymentRequestHash: paymentRequest ? hashFiberPaymentRequest(paymentRequest) : undefined,
         raw: result.raw
       };
     } catch (error) {
