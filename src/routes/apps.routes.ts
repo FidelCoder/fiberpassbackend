@@ -293,7 +293,7 @@ appsRouter.get('/apps/:appId/charges', requireAuth, asyncHandler(async (request,
 }));
 
 appsRouter.post('/apps/:appId/charges', appChargeRateLimit, requireAppApiKeyWithScopes(['charges:create']), asyncHandler(async (request, response) => {
-  const { appId, keyId, serviceAddress } = (request as AppAuthenticatedRequest).appAuth;
+  const { appId, ownerWalletId, keyId, serviceAddress } = (request as AppAuthenticatedRequest).appAuth;
   const payload = chargeSchema.parse(request.body);
   const paymentRequest = payload.paymentRequest || payload.fiberInvoice || undefined;
   const metadata = {
@@ -312,7 +312,9 @@ appsRouter.post('/apps/:appId/charges', appChargeRateLimit, requireAppApiKeyWith
     metadata,
     appId,
     apiKeyId: keyId,
-    appServiceAddress: serviceAddress
+    appOwnerWalletId: ownerWalletId,
+    appServiceAddress: serviceAddress,
+    chargeOrigin: 'app_api_key'
   });
   response.json({ ok: true, overview });
 }));

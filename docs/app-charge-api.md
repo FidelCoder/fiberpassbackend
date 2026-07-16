@@ -7,7 +7,23 @@ Apps should charge a pass through the backend, never directly from the browser.
 - Send an app API key.
 - Send an idempotency key for every charge.
 - Send a Fiber payment request when using the Fiber rail.
+- Send the pass payment reference whenever the pass has one configured.
 - Scheduled invoice/recipient payouts are Fiber-only and require Fiber invoice/payment requests; FiberPass bridges reserved vault liquidity into channel liquidity when needed.
+
+## Owner-Bound App Grants
+
+Direct app charges require a durable grant from the pass owner's wallet. A grant binds the pass to the registered app id, app owner wallet, service address, and the structured `charges:create` permission. A matching service address by itself never grants access.
+
+New passes can set `appId` to an active developer app owned by the authenticated wallet. To authorize an existing manual pass, its owner calls `POST /sessions/:id/app-grant` with:
+
+```json
+{
+  "appId": "fp_app_example",
+  "appPermissions": ["charges:create"]
+}
+```
+
+Manual and legacy passes without this explicit grant remain owner-controlled. Setting `autoMicroCharges` to `false` also blocks all direct app API charges without affecting trusted scheduled payout workers.
 
 ## Receipt Fields
 
@@ -26,6 +42,15 @@ Successful charge attempts return and persist:
 Apps should treat these as final user/pass state failures:
 
 - `APP_SESSION_MISMATCH`
+- `APP_AUTH_CONTEXT_REQUIRED`
+- `APP_OWNER_MISMATCH`
+- `APP_SESSION_GRANT_REQUIRED`
+- `APP_GRANT_OWNER_MISMATCH`
+- `APP_SERVICE_ADDRESS_MISMATCH`
+- `APP_CHARGES_DISABLED`
+- `APP_SESSION_PERMISSION_REQUIRED`
+- `PAYMENT_REFERENCE_REQUIRED`
+- `PAYMENT_REFERENCE_MISMATCH`
 - `SESSION_NOT_CHARGEABLE`
 - `SESSION_EXPIRED`
 - `SESSION_LIMIT_EXCEEDED`
