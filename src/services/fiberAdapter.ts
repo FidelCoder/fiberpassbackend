@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { ApiError } from '../lib/errors.js';
-import { fiberProvider, type FiberInvoiceCurrency, type FiberParsedInvoice, type FiberProvider, type FiberProviderKind } from './fiberProvider.js';
+import { fiberProvider, type FiberInvoiceCurrency, type FiberParsedInvoice, type FiberPaymentStatusResult, type FiberProvider, type FiberProviderKind } from './fiberProvider.js';
 
 const MIN_FIBER_PAYMENT_REQUEST_LENGTH = 16;
 
@@ -21,6 +21,13 @@ export interface FiberPaymentExecutionResult {
   proofType: 'fiber_payment';
   paymentRequestHash?: string;
   raw?: unknown;
+}
+
+export interface FiberPreparedPayment {
+  paymentRequest?: string;
+  paymentRequestHash?: string;
+  providerCorrelationId?: string;
+  invoice?: FiberParsedInvoice;
 }
 
 function expectedInvoiceCurrency(network: string): FiberInvoiceCurrency {
@@ -76,7 +83,7 @@ export function hashFiberPaymentRequest(value: string): string {
 export class FiberAdapter {
   constructor(private readonly provider: FiberProvider = fiberProvider) {}
 
-  async executePayment(input: FiberPaymentExecutionInput): Promise<FiberPaymentExecutionResult> {
+  async preparePayment(input: FiberPaymentExecutionInput): Promise<FiberPreparedPayment> {
     const keysendTargetPubkey = typeof input.metadata?.fiberKeysendTargetPubkey === 'string'
       ? input.metadata.fiberKeysendTargetPubkey.trim()
       : '';
@@ -93,6 +100,24 @@ export class FiberAdapter {
           network: this.provider.network
         });
       }
+      return {
+        paymentRequest,
+        paymentRequestHash: paymentRequest ? hashFiberPaymentRequest(paymentRequest) : undefined,
+        providerCorrelationId: invoice?.paymentHash,
+        invoice
+      };
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      const message = error instanceof Error ? error.message : 'Fiber payment preparation failed.';
+      const code = /parse_invoice|invoice/i.test(message) ? 'FIBER_INVOICE_PARSE_FAILED' : 'FIBER_PAYMENT_FAILED';
+      throw new ApiError(502, code, message);
+    }
+  }
+
+  async executePayment(input: FiberPaymentExecutionInput, prepared?: FiberPreparedPayment): Promise<FiberPaymentExecutionResult> {
+    try {
+      const payment = prepared ?? await this.preparePayment(input);
+      const paymentRequest = payment.paymentRequest;
       const result = await this.provider.authorizeCharge({
         sessionId: input.sessionId,
         networkSessionId: input.networkSessionId,
@@ -109,7 +134,7 @@ export class FiberAdapter {
       if (!/^0x[0-9a-fA-F]{64}$/.test(result.proofId)) {
         throw new ApiError(502, 'FIBER_PAYMENT_PROOF_MISSING', 'Fiber payment succeeded without a valid payment hash proof.');
       }
-      if (invoice && result.proofId.toLowerCase() !== invoice.paymentHash) {
+      if (payment.invoice && result.proofId.toLowerCase() !== payment.invoice.paymentHash) {
         throw new ApiError(502, 'FIBER_PAYMENT_PROOF_MISMATCH', 'Fiber payment proof does not match the requested invoice.');
       }
 
@@ -118,7 +143,7 @@ export class FiberAdapter {
         network: result.network,
         proofId: result.proofId,
         proofType: 'fiber_payment',
-        paymentRequestHash: paymentRequest ? hashFiberPaymentRequest(paymentRequest) : undefined,
+        paymentRequestHash: payment.paymentRequestHash,
         raw: result.raw
       };
     } catch (error) {
@@ -126,6 +151,18 @@ export class FiberAdapter {
       const message = error instanceof Error ? error.message : 'Fiber payment failed.';
       const code = /parse_invoice|invoice/i.test(message) ? 'FIBER_INVOICE_PARSE_FAILED' : 'FIBER_PAYMENT_FAILED';
       throw new ApiError(502, code, message);
+    }
+  }
+
+  async reconcilePayment(providerCorrelationId: string): Promise<FiberPaymentStatusResult> {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(providerCorrelationId)) {
+      throw new ApiError(409, 'CHARGE_RECONCILIATION_REQUIRED', 'This payment does not have a queryable Fiber payment hash.');
+    }
+    try {
+      return await this.provider.getPayment(providerCorrelationId.toLowerCase());
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw new ApiError(502, 'FIBER_PAYMENT_RECONCILIATION_FAILED', error instanceof Error ? error.message : 'Fiber payment reconciliation failed.');
     }
   }
 

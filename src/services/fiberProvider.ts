@@ -57,6 +57,17 @@ export interface FiberParsedInvoice {
   raw?: unknown;
 }
 
+export type FiberPaymentStatus = 'Created' | 'Inflight' | 'Success' | 'Failed';
+
+export interface FiberPaymentStatusResult {
+  provider: FiberProviderKind;
+  network: string;
+  paymentHash: string;
+  status: FiberPaymentStatus;
+  failure?: string;
+  raw?: unknown;
+}
+
 export interface FiberTopUpInput extends FiberMoneyInput {
   sessionId: string;
   networkSessionId?: string;
@@ -97,6 +108,7 @@ export interface FiberProvider {
   readonly network: string;
   createSession(input: FiberCreateSessionInput): Promise<FiberCreateSessionResult>;
   parseInvoice(paymentRequest: string): Promise<FiberParsedInvoice>;
+  getPayment(paymentHash: string): Promise<FiberPaymentStatusResult>;
   authorizeCharge(input: FiberAuthorizeChargeInput): Promise<FiberChargeResult>;
   topUpSession(input: FiberTopUpInput): Promise<FiberTopUpResult>;
   revokeSession(input: FiberSettleInput): Promise<FiberSettleResult>;
@@ -202,6 +214,30 @@ export class RpcFiberProvider implements FiberProvider {
 
   async parseInvoice(paymentRequest: string): Promise<FiberParsedInvoice> {
     return parseFiberInvoiceRpcResult(await this.rpc('parse_invoice', [{ invoice: paymentRequest }]));
+  }
+
+  async getPayment(paymentHash: string): Promise<FiberPaymentStatusResult> {
+    const raw = await this.rpc('get_payment', [{ payment_hash: paymentHash }]);
+    const result = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+    const status = result.status;
+    if (status !== 'Created' && status !== 'Inflight' && status !== 'Success' && status !== 'Failed') {
+      throw new Error('Fiber payment returned an unsupported status.');
+    }
+    const returnedHash = typeof result.payment_hash === 'string' ? result.payment_hash.toLowerCase() : paymentHash.toLowerCase();
+    if (!/^0x[0-9a-f]{64}$/.test(returnedHash)) {
+      throw new Error('Fiber payment returned an invalid payment hash.');
+    }
+    if (returnedHash !== paymentHash.toLowerCase()) {
+      throw new Error('Fiber payment response does not match the requested payment hash.');
+    }
+    return {
+      provider: this.kind,
+      network: this.network,
+      paymentHash: returnedHash,
+      status,
+      failure: typeof result.failed_error === 'string' ? result.failed_error : undefined,
+      raw
+    };
   }
 
   async authorizeCharge(input: FiberAuthorizeChargeInput): Promise<FiberChargeResult> {

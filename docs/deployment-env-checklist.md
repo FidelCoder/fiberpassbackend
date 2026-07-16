@@ -12,7 +12,7 @@ Use this checklist before each production-like deploy.
 Required:
 
 - `NODE_ENV=production`
-- `MONGODB_URI`
+- `MONGODB_URI`: replica set or sharded cluster; standalone MongoDB cannot provide charge reservation transactions.
 - `FRONTEND_ORIGIN`: deployed frontend origin.
 - `PUBLIC_APP_URL`: deployed frontend URL for magic links and emails.
 - `CRON_SECRET`: strong random value for worker/operator routes.

@@ -21,6 +21,14 @@ const provider: FiberProvider = {
       signed: true
     };
   },
+  async getPayment(paymentHash) {
+    return {
+      provider: 'rpc',
+      network: 'testnet',
+      paymentHash,
+      status: 'Success'
+    };
+  },
   async authorizeCharge(input) {
     capturedCharge = input;
     return {
@@ -64,6 +72,19 @@ assert.equal(result.proofId, '0x' + '22'.repeat(32));
 assert.equal(result.proofType, 'fiber_payment');
 assert.equal(result.paymentRequestHash, hashFiberPaymentRequest(paymentRequest));
 assert.equal(capturedCharge?.paymentRequest, paymentRequest);
+
+const preparedPayment = await adapter.preparePayment({
+  sessionId: 'fp_pass_1',
+  appAddress: 'ckt1app',
+  amountMinor: 2_000_000,
+  currency: 'CKB',
+  paymentRequest
+});
+assert.equal(preparedPayment.providerCorrelationId, '0x' + '22'.repeat(32));
+assert.equal(preparedPayment.paymentRequestHash, hashFiberPaymentRequest(paymentRequest));
+const reconciledPayment = await adapter.reconcilePayment(preparedPayment.providerCorrelationId ?? '');
+assert.equal(reconciledPayment.status, 'Success');
+assert.equal(reconciledPayment.paymentHash, preparedPayment.providerCorrelationId);
 
 for (const [expectedCode, proofId] of [
   ['FIBER_PAYMENT_PROOF_MISSING', ''],
@@ -114,7 +135,7 @@ assert.ok(ChargeAttemptModel.schema.path('paymentRequestHash'));
 const indexes = ChargeAttemptModel.schema.indexes();
 assert.ok(indexes.some(([fields, options]) => {
   return Boolean(
-    fields.appId === 1
+    fields.sessionId === 1
     && fields.idempotencyKey === 1
     && options?.unique === true
   );

@@ -3,6 +3,7 @@ import type { SessionRecord } from '../models/session.model.js';
 import {
   assertChargePreflight,
   normalizeSessionAppPermissions,
+  sanitizeChargeMetadata,
   type ChargeSessionInput
 } from '../services/session.service.js';
 
@@ -91,6 +92,21 @@ assert.deepEqual(normalizeSessionAppPermissions([
 ]), ['charges:create']);
 assert.deepEqual(normalizeSessionAppPermissions(['legacy descriptive permission']), []);
 assert.deepEqual(normalizeSessionAppPermissions(undefined, true), ['charges:create']);
+
+assert.deepEqual(sanitizeChargeMetadata({
+  ...directAppCharge,
+  metadata: {
+    scheduledPayout: true,
+    directVaultPayout: true,
+    fiberKeysendTargetPubkey: '02-attacker',
+    fiberAllowSelfPayment: true,
+    recipientAddress: 'ckt1-recipient',
+    paymentReference: 'subscription-42'
+  }
+}), {
+  recipientAddress: 'ckt1-recipient',
+  paymentReference: 'subscription-42'
+});
 
 assert.doesNotThrow(() => assertChargePreflight({
   ...baseSession,

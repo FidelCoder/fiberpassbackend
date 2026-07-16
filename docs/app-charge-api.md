@@ -35,6 +35,8 @@ Successful charge attempts return and persist:
 - explorer URL when the proof is a CKB transaction
 - idempotency key
 - service reference
+- provider status and correlation id while reconciliation is pending
+- reserved pass balance while a provider outcome is pending
 - remaining pass balance
 
 ## Failure Handling
@@ -64,6 +66,14 @@ Apps should treat these as final user/pass state failures:
 - `FIBER_INVOICE_EXPIRED`
 - `FIBER_PAYMENT_PROOF_MISSING`
 - `FIBER_PAYMENT_PROOF_MISMATCH`
+
+The following states must be retried with the same idempotency key. FiberPass will reconcile or finalize the existing attempt and will not create a second provider payment:
+
+- `CHARGE_ATTEMPT_PENDING`
+- `CHARGE_OUTCOME_UNCERTAIN`
+- `CHARGE_FINALIZATION_PENDING`
+
+`CHARGE_ATTEMPT_FAILED` is final for that idempotency key. Submit a corrected request with a new key only after inspecting its stored failure code. Requests without a key fail with `IDEMPOTENCY_KEY_REQUIRED`.
 
 Retry only transport errors and temporary provider failures with the same idempotency key.
 

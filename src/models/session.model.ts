@@ -105,6 +105,7 @@ const sessionSchema = new Schema(
     networkFeeEstimateMinor: { type: Number, min: 0, default: 0 },
     spent: { type: Number, required: true, min: 0, default: 0 },
     spentMinor: { type: Number, min: 0, default: 0 },
+    reservedMinor: { type: Number, min: 0, default: 0 },
     limit: { type: Number, required: true, min: 0.01 },
     limitMinor: { type: Number, min: 1 },
     currency: { type: String, required: true, default: 'CKB' },

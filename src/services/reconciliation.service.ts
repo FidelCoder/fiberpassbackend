@@ -5,6 +5,7 @@ import { InvoiceModel, PaymentJobModel } from '../models/automation.model.js';
 import { SessionModel, type SessionRecord, type SessionStatus } from '../models/session.model.js';
 import { WalletModel } from '../models/wallet.model.js';
 import { writeAuditLog } from './audit.service.js';
+import { releaseChargeReservation } from './chargeReservation.service.js';
 import { CREATE_SESSION_POLICY, reconcileWalletBalanceWithCurrentVault } from './session.service.js';
 
 export interface ReconciliationWorkerOptions {
@@ -78,16 +79,18 @@ async function expireDueSessions(limit: number): Promise<number> {
 async function releaseStaleChargeAttempts(staleBefore: Date, limit: number): Promise<number> {
   const attempts = await ChargeAttemptModel.find({
     status: 'pending',
-    createdAt: { $lte: staleBefore }
+    reserveStatus: 'reserved',
+    providerStatus: 'not_started',
+    executionLeaseExpiresAt: { $lte: staleBefore }
   }).sort({ createdAt: 1 }).limit(limit);
 
   let released = 0;
   for (const attempt of attempts) {
-    attempt.status = 'failed';
-    attempt.reserveStatus = 'released';
-    attempt.failureCode = 'STALE_CHARGE_ATTEMPT';
-    attempt.failureMessage = 'Charge attempt timed out before a payment proof was recorded.';
-    await attempt.save();
+    await releaseChargeReservation(
+      attempt.attemptId,
+      'STALE_CHARGE_ATTEMPT',
+      'Charge attempt lease expired before provider submission.'
+    );
     await writeAuditLog({
       actorWalletId: attempt.ownerWalletId ?? undefined,
       action: 'reconciliation.charge_attempt_released',

@@ -68,6 +68,8 @@ export interface AppChargeAttemptDto {
   remainingBalanceMinor?: number;
   provider?: string;
   network?: string;
+  providerStatus?: string;
+  providerCorrelationId?: string;
   proofId?: string;
   proofType?: string;
   executionLayer?: string;
@@ -179,6 +181,8 @@ export function toAppChargeAttemptDto(attempt: ChargeAttemptRecord & { createdAt
     remainingBalanceMinor,
     provider: attempt.provider ?? undefined,
     network: attempt.network ?? undefined,
+    providerStatus: attempt.providerStatus ?? undefined,
+    providerCorrelationId: attempt.providerCorrelationId ?? undefined,
     proofId: attempt.proofId ?? undefined,
     proofType: attempt.proofType ?? undefined,
     executionLayer: attempt.executionLayer ?? undefined,
