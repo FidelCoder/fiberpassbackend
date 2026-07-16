@@ -31,5 +31,15 @@ Apps should treat these as final user/pass state failures:
 - `SESSION_LIMIT_EXCEEDED`
 - `DAILY_SESSION_LIMIT_EXCEEDED`
 - `FIBER_INVOICE_REQUIRED`
+- `FIBER_INVOICE_AMOUNT_REQUIRED`
+- `FIBER_INVOICE_AMOUNT_MISMATCH`
+- `FIBER_INVOICE_CURRENCY_MISMATCH`
+- `FIBER_INVOICE_NETWORK_MISMATCH`
+- `FIBER_INVOICE_UNSIGNED`
+- `FIBER_INVOICE_EXPIRED`
+- `FIBER_PAYMENT_PROOF_MISSING`
+- `FIBER_PAYMENT_PROOF_MISMATCH`
 
 Retry only transport errors and temporary provider failures with the same idempotency key.
+
+FiberPass parses every invoice through the configured Fiber RPC before payment. The invoice must be signed, encode the exact CKB amount being debited, match the configured Fiber network, remain unexpired, and return a successful payment hash proof.

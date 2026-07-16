@@ -33,6 +33,7 @@ Fiber node infrastructure:
 - `FIBER_PROVIDER=rpc`
 - `FIBER_NETWORK=testnet`
 - `FIBER_RPC_URL`: reachable HTTPS Fiber RPC gateway, not `127.0.0.1` or `localhost`.
+- `FIBER_RPC_TIMEOUT_MS`: maximum time for invoice parsing and payment RPC requests.
 - `FIBER_API_KEY`: gateway token if the node is protected.
 - `FIBER_PEER_ID`: local node peer id reported by `node_info`.
 - `FIBER_TARGET_PEER_IDS`: comma-separated external peer ids used for channel opening and strategy.

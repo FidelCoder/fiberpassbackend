@@ -39,6 +39,21 @@ export interface FiberChargeResult {
   network: string;
   authorized: true;
   proofId: string;
+  status: 'Success';
+  raw?: unknown;
+}
+
+export type FiberInvoiceCurrency = 'Fibb' | 'Fibt' | 'Fibd';
+
+export interface FiberParsedInvoice {
+  amountMinor?: number;
+  currency: FiberInvoiceCurrency;
+  paymentHash: string;
+  createdAtSeconds: number;
+  expiresAtSeconds?: number;
+  payeePubkey?: string;
+  hasUdtScript: boolean;
+  signed: boolean;
   raw?: unknown;
 }
 
@@ -81,6 +96,7 @@ export interface FiberProvider {
   readonly kind: FiberProviderKind;
   readonly network: string;
   createSession(input: FiberCreateSessionInput): Promise<FiberCreateSessionResult>;
+  parseInvoice(paymentRequest: string): Promise<FiberParsedInvoice>;
   authorizeCharge(input: FiberAuthorizeChargeInput): Promise<FiberChargeResult>;
   topUpSession(input: FiberTopUpInput): Promise<FiberTopUpResult>;
   revokeSession(input: FiberSettleInput): Promise<FiberSettleResult>;
@@ -90,6 +106,64 @@ export interface FiberProvider {
 
 function fiberRpcHexQuantity(value: number): string {
   return '0x' + BigInt(Math.trunc(value)).toString(16);
+}
+
+function rpcSafeInteger(value: unknown, field: string): number {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    throw new Error('Fiber invoice is missing ' + field + '.');
+  }
+  let parsed: bigint;
+  try {
+    parsed = BigInt(value);
+  } catch {
+    throw new Error('Fiber invoice has an invalid ' + field + '.');
+  }
+  if (parsed < 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error('Fiber invoice ' + field + ' exceeds the safe integer range.');
+  }
+  return Number(parsed);
+}
+
+function invoiceAttribute(attrs: unknown, name: string): unknown {
+  if (!Array.isArray(attrs)) return undefined;
+  for (const attribute of attrs) {
+    if (attribute && typeof attribute === 'object' && name in attribute) {
+      return (attribute as Record<string, unknown>)[name];
+    }
+  }
+  return undefined;
+}
+
+export function parseFiberInvoiceRpcResult(raw: unknown): FiberParsedInvoice {
+  const result = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  const invoice = result.invoice && typeof result.invoice === 'object' ? result.invoice as Record<string, unknown> : {};
+  const data = invoice.data && typeof invoice.data === 'object' ? invoice.data as Record<string, unknown> : {};
+  const currency = invoice.currency;
+  if (currency !== 'Fibb' && currency !== 'Fibt' && currency !== 'Fibd') {
+    throw new Error('Fiber invoice has an unsupported currency.');
+  }
+
+  const paymentHash = typeof data.payment_hash === 'string' ? data.payment_hash.trim() : '';
+  if (!/^0x[0-9a-fA-F]{64}$/.test(paymentHash)) {
+    throw new Error('Fiber invoice has an invalid payment hash.');
+  }
+
+  const createdAtSeconds = rpcSafeInteger(data.timestamp, 'timestamp');
+  const expiryValue = invoiceAttribute(data.attrs, 'expiry_time');
+  const expirySeconds = expiryValue == null ? undefined : rpcSafeInteger(expiryValue, 'expiry');
+  const payeeValue = invoiceAttribute(data.attrs, 'payee_public_key');
+
+  return {
+    amountMinor: invoice.amount == null ? undefined : rpcSafeInteger(invoice.amount, 'amount'),
+    currency,
+    paymentHash: paymentHash.toLowerCase(),
+    createdAtSeconds,
+    expiresAtSeconds: expirySeconds == null ? undefined : createdAtSeconds + expirySeconds,
+    payeePubkey: typeof payeeValue === 'string' && payeeValue.trim() ? payeeValue.trim() : undefined,
+    hasUdtScript: invoiceAttribute(data.attrs, 'udt_script') != null,
+    signed: typeof invoice.signature === 'string' && invoice.signature.trim().length > 0,
+    raw
+  };
 }
 
 export class RpcFiberProvider implements FiberProvider {
@@ -126,6 +200,10 @@ export class RpcFiberProvider implements FiberProvider {
     };
   }
 
+  async parseInvoice(paymentRequest: string): Promise<FiberParsedInvoice> {
+    return parseFiberInvoiceRpcResult(await this.rpc('parse_invoice', [{ invoice: paymentRequest }]));
+  }
+
   async authorizeCharge(input: FiberAuthorizeChargeInput): Promise<FiberChargeResult> {
     const keysendTargetPubkey = typeof input.metadata?.fiberKeysendTargetPubkey === 'string'
       ? input.metadata.fiberKeysendTargetPubkey.trim()
@@ -143,6 +221,7 @@ export class RpcFiberProvider implements FiberProvider {
         network: this.network,
         authorized: true,
         proofId: String((raw as { payment_hash?: unknown })?.payment_hash ?? (raw as { hash?: unknown })?.hash ?? (raw as { payment_preimage?: unknown })?.payment_preimage ?? ''),
+        status: this.successfulPaymentStatus(raw),
         raw
       };
     }
@@ -163,6 +242,7 @@ export class RpcFiberProvider implements FiberProvider {
       network: this.network,
       authorized: true,
       proofId: String((raw as { payment_hash?: unknown })?.payment_hash ?? (raw as { hash?: unknown })?.hash ?? ''),
+      status: this.successfulPaymentStatus(raw),
       raw
     };
   }
@@ -214,20 +294,44 @@ export class RpcFiberProvider implements FiberProvider {
   }
 
   private async rpc(method: string, params: unknown[]): Promise<unknown> {
-    const response = await fetch(this.rpcUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(env.FIBER_API_KEY ? { Authorization: 'Bearer ' + env.FIBER_API_KEY } : {})
-      },
-      body: JSON.stringify({ jsonrpc: '2.0', id: this.nextId++, method, params })
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), env.FIBER_RPC_TIMEOUT_MS);
+    try {
+      const response = await fetch(this.rpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(env.FIBER_API_KEY ? { Authorization: 'Bearer ' + env.FIBER_API_KEY } : {})
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: this.nextId++, method, params }),
+        signal: controller.signal
+      });
 
-    const payload = await response.json() as { result?: unknown; error?: { code?: number; message?: string } };
-    if (!response.ok || payload.error) {
-      throw new Error(payload.error?.message ?? 'Fiber RPC request failed: ' + method);
+      const payload = await response.json().catch(() => null) as { result?: unknown; error?: { code?: number; message?: string } } | null;
+      if (!response.ok || payload?.error) {
+        throw new Error(payload?.error?.message ?? 'Fiber RPC request failed: ' + method);
+      }
+      if (!payload || payload.result == null) {
+        throw new Error('Fiber RPC returned no result: ' + method);
+      }
+      return payload.result;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new Error('Fiber RPC request timed out: ' + method);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
     }
-    return payload.result;
+  }
+
+  private successfulPaymentStatus(raw: unknown): 'Success' {
+    const status = raw && typeof raw === 'object' ? (raw as { status?: unknown }).status : undefined;
+    if (status !== 'Success') {
+      const failedError = raw && typeof raw === 'object' ? (raw as { failed_error?: unknown }).failed_error : undefined;
+      throw new Error(typeof failedError === 'string' && failedError ? failedError : 'Fiber payment did not reach Success status.');
+    }
+    return 'Success';
   }
 }
 

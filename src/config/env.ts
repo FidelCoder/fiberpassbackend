@@ -20,6 +20,7 @@ const envSchema = z.object({
   FIBER_NETWORK: z.string().default('testnet'),
   FIBER_PROVIDER: z.literal('rpc').default('rpc'),
   FIBER_RPC_URL: z.string().min(1).default('http://127.0.0.1:8227'),
+  FIBER_RPC_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
   FIBER_API_KEY: z.string().optional().default(''),
   FIBER_PEER_ID: z.string().optional().default(''),
   FIBER_NODE_MIN_PEERS: z.coerce.number().int().nonnegative().default(1),
