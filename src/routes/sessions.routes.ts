@@ -174,6 +174,7 @@ sessionsRouter.post('/sessions/:id/close', requireAuth, asyncHandler(async (requ
 
 sessionsRouter.get('/events', requireAuth, asyncHandler(async (request, response) => {
   const { walletId } = (request as AuthenticatedRequest).auth;
+  const requestedCursor = request.get('Last-Event-ID') ?? (typeof request.query.cursor === 'string' ? request.query.cursor : undefined);
 
   response.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -182,21 +183,41 @@ sessionsRouter.get('/events', requireAuth, asyncHandler(async (request, response
     'X-Accel-Buffering': 'no'
   });
 
-  const send = (eventName: string, payload: unknown) => {
+  const send = (eventName: string, payload: unknown, cursor?: string) => {
+    if (cursor) response.write(`id: ${cursor}\n`);
     response.write(`event: ${eventName}\n`);
     response.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
 
   const eventName = `overview:${walletId}`;
-  const overviewHandler = (payload: unknown) => send('overview', payload);
-  liveEvents.on(eventName, overviewHandler);
+  let cursor = requestedCursor ?? await liveEvents.latestCursor(eventName);
+  let polling = false;
+  let closed = false;
 
-  send('overview', await getSessionsOverview(walletId));
-  const heartbeat = setInterval(() => send('heartbeat', { at: new Date().toISOString() }), 30000);
+  if (!requestedCursor) send('overview', await getSessionsOverview(walletId), cursor);
+
+  const poll = async () => {
+    if (closed || polling) return;
+    polling = true;
+    try {
+      const events = await liveEvents.readAfter(eventName, cursor, 100);
+      for (const event of events) {
+        send('overview', event.payload, event.cursor);
+        cursor = event.cursor;
+      }
+    } finally {
+      polling = false;
+    }
+  };
+
+  await poll();
+  const durablePoll = setInterval(() => void poll().catch(() => undefined), 1500);
+  const heartbeat = setInterval(() => send('heartbeat', { at: new Date().toISOString(), cursor }), 30000);
 
   request.on('close', () => {
+    closed = true;
+    clearInterval(durablePoll);
     clearInterval(heartbeat);
-    liveEvents.off(eventName, overviewHandler);
     response.end();
   });
 }));
