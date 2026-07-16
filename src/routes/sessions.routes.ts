@@ -4,6 +4,7 @@ import { asyncHandler } from '../lib/asyncHandler.js';
 import { FIBER_CKB_ADDRESS_ERROR, isFiberCkbAddress } from '../lib/fiberAddress.js';
 import { liveEvents } from '../lib/liveEvents.js';
 import { requireAuth } from '../middleware/auth.middleware.js';
+import { SESSION_APP_PERMISSIONS } from '../models/session.model.js';
 import {
   CREATE_SESSION_POLICY,
   claimRecipientWallet,
@@ -11,6 +12,7 @@ import {
   getCreateSessionPolicy,
   getRecipientClaim,
   getSessionsOverview,
+  grantAppAccessToSession,
   isValidIconType,
   isValidPaymentPurpose,
   isValidReleaseCadence,
@@ -65,6 +67,12 @@ const topUpSchema = z.object({
   amount: z.coerce.number().positive().max(100000).default(1)
 });
 
+const appGrantSchema = z.object({
+  appId: z.string().trim().min(1).max(80),
+  appPermissions: z.array(z.enum(SESSION_APP_PERMISSIONS)).min(1).max(SESSION_APP_PERMISSIONS.length)
+    .default([...SESSION_APP_PERMISSIONS])
+});
+
 const paramsSchema = z.object({ id: z.string().min(1) });
 const claimParamsSchema = z.object({ token: z.string().trim().min(32).max(200) });
 const claimWalletSchema = z.object({
@@ -109,6 +117,13 @@ sessionsRouter.post('/sessions', requireAuth, asyncHandler(async (request, respo
   const { walletId } = (request as AuthenticatedRequest).auth;
   const payload = createSessionSchema.parse(request.body);
   response.status(201).json(await createSession(payload, walletId));
+}));
+
+sessionsRouter.post('/sessions/:id/app-grant', requireAuth, asyncHandler(async (request, response) => {
+  const { walletId } = (request as AuthenticatedRequest).auth;
+  const { id } = paramsSchema.parse(request.params);
+  const payload = appGrantSchema.parse(request.body ?? {});
+  response.json(await grantAppAccessToSession(id, walletId, payload));
 }));
 
 sessionsRouter.post('/sessions/:id/top-up', requireAuth, asyncHandler(async (request, response) => {

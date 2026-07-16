@@ -12,6 +12,9 @@ export type PaymentPurpose = (typeof PAYMENT_PURPOSES)[number];
 export const RELEASE_CADENCES = ['none', 'on_demand', 'daily', 'weekly', 'monthly', 'custom'] as const;
 export type ReleaseCadence = (typeof RELEASE_CADENCES)[number];
 
+export const SESSION_APP_PERMISSIONS = ['charges:create'] as const;
+export type SessionAppPermission = (typeof SESSION_APP_PERMISSIONS)[number];
+
 const transactionLogSchema = new Schema(
   {
     id: { type: String, required: true },
@@ -82,6 +85,8 @@ const sessionSchema = new Schema(
     appUrl: { type: String, trim: true },
     appTrustLevel: { type: String, trim: true },
     appPermissions: { type: [String], default: [] },
+    appGrantOwnerWalletId: { type: String, trim: true },
+    appGrantCreatedAt: { type: Date },
     chargePolicy: { type: String, trim: true },
     paymentPurpose: { type: String, enum: PAYMENT_PURPOSES, required: true, default: 'app_session', index: true },
     recipientName: { type: String, trim: true },

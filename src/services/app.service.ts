@@ -329,7 +329,11 @@ export async function authenticateAppApiKey(secret: string, routeAppId?: string,
     throw new ApiError(403, 'APP_API_KEY_SCOPE_REQUIRED', 'API key is missing the required FiberPass app permission.');
   }
 
-  const app = await AppModel.findOne({ appId: key.appId, status: 'active' }).lean<AppRecord>();
+  const app = await AppModel.findOne({
+    appId: key.appId,
+    ownerWalletId: key.ownerWalletId,
+    status: 'active'
+  }).lean<AppRecord>();
   if (!app) {
     throw new ApiError(403, 'APP_NOT_ACTIVE', 'Developer app is not active.');
   }

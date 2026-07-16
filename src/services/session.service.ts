@@ -6,8 +6,9 @@ import { ApiError } from '../lib/errors.js';
 import { FIBER_CKB_ADDRESS_ERROR, isFiberCkbAddress } from '../lib/fiberAddress.js';
 import { liveEvents } from '../lib/liveEvents.js';
 import { clampMinorUnits, fallbackMinorUnits, fromMinorUnits, roundMoney, toMinorUnits } from '../lib/money.js';
+import { AppModel, type AppRecord } from '../models/app.model.js';
 import { ChargeAttemptModel, type ChargeAttemptRecord } from '../models/chargeAttempt.model.js';
-import { ICON_TYPES, PAYMENT_PURPOSES, RELEASE_CADENCES, SessionModel, type IconType, type PaymentPurpose, type ReleaseCadence, type SessionRecord, type SessionStatus } from '../models/session.model.js';
+import { ICON_TYPES, PAYMENT_PURPOSES, RELEASE_CADENCES, SESSION_APP_PERMISSIONS, SessionModel, type IconType, type PaymentPurpose, type ReleaseCadence, type SessionAppPermission, type SessionRecord, type SessionStatus } from '../models/session.model.js';
 import { WalletFundingModel } from '../models/walletFunding.model.js';
 import { WalletModel, type WalletRecord } from '../models/wallet.model.js';
 import { writeAuditLog } from './audit.service.js';
@@ -181,6 +182,8 @@ interface SessionLike {
   appUrl?: string;
   appTrustLevel?: string;
   appPermissions?: string[];
+  appGrantOwnerWalletId?: string;
+  appGrantCreatedAt?: Date;
   chargePolicy?: string;
   paymentPurpose?: PaymentPurpose;
   recipientName?: string;
@@ -227,6 +230,8 @@ export interface SessionDto {
   appUrl?: string;
   appTrustLevel?: string;
   appPermissions?: string[];
+  appGrantOwnerWalletId?: string;
+  appGrantCreatedAt?: string;
   chargePolicy?: string;
   paymentPurpose?: PaymentPurpose;
   recipientName?: string;
@@ -318,12 +323,19 @@ export interface ChargeSessionInput {
   type: string;
   appId?: string;
   apiKeyId?: string;
+  appOwnerWalletId?: string;
   appServiceAddress?: string;
+  chargeOrigin?: 'app_api_key' | 'system';
   idempotencyKey?: string;
   serviceReference?: string;
   paymentRequest?: string;
   deferSingleUseSettlement?: boolean;
   metadata?: Record<string, unknown>;
+}
+
+export interface GrantSessionAppInput {
+  appId: string;
+  appPermissions?: string[];
 }
 
 export interface CreateSessionPolicyDto {
@@ -450,6 +462,8 @@ function toSessionDto(session: SessionLike, chargeAttempts: ChargeAttemptDto[] =
     appUrl: session.appUrl,
     appTrustLevel: session.appTrustLevel,
     appPermissions: session.appPermissions ?? [],
+    appGrantOwnerWalletId: session.appGrantOwnerWalletId,
+    appGrantCreatedAt: session.appGrantCreatedAt instanceof Date ? session.appGrantCreatedAt.toISOString() : undefined,
     chargePolicy: session.chargePolicy,
     paymentPurpose: session.paymentPurpose ?? 'app_session',
     recipientName: session.recipientName,
@@ -543,6 +557,19 @@ export function getCreateSessionPolicy(): CreateSessionPolicyDto {
 function getVerifiedApp(appId?: string): VerifiedAppDto | undefined {
   if (!appId || appId === 'manual') return undefined;
   return VERIFIED_APP_CATALOG.find((app) => app.id === appId);
+}
+
+const SESSION_APP_PERMISSION_SET = new Set<string>(SESSION_APP_PERMISSIONS);
+
+export function normalizeSessionAppPermissions(
+  permissions?: readonly string[] | null,
+  defaultChargePermission = false
+): SessionAppPermission[] {
+  const normalized = (permissions ?? [])
+    .map((permission) => permission.trim())
+    .filter((permission): permission is SessionAppPermission => SESSION_APP_PERMISSION_SET.has(permission));
+  const unique = [...new Set(normalized)];
+  return unique.length > 0 || !defaultChargePermission ? unique : ['charges:create'];
 }
 
 function validateCreateLimit(limitMinor: number): void {
@@ -1006,7 +1033,7 @@ function ruleMaxChargeMinor(session: { maxChargeAmountMinor?: number | null; max
   return undefined;
 }
 
-function assertChargeAllowedBySessionRules(session: SessionRecord, input: ChargeSessionInput, amountMinor: number): void {
+export function assertChargeAllowedBySessionRules(session: SessionRecord, input: ChargeSessionInput, amountMinor: number): void {
   const purpose = normalizePaymentPurpose(session.paymentPurpose as PaymentPurpose | undefined);
   const maxChargeMinor = ruleMaxChargeMinor(session);
   if (maxChargeMinor != null && amountMinor > maxChargeMinor) {
@@ -1015,8 +1042,11 @@ function assertChargeAllowedBySessionRules(session: SessionRecord, input: Charge
 
   const reference = cleanOptionalString(session.paymentReference as string | undefined);
   if (reference) {
-    const requestReference = metadataString(input.metadata, 'serviceReference', 'paymentReference', 'subscriptionId', 'externalReference', 'invoiceReference');
-    if (requestReference && requestReference !== reference) {
+    const requestReference = chargeServiceReference(input);
+    if (!requestReference) {
+      throw new ApiError(403, 'PAYMENT_REFERENCE_REQUIRED', 'This FiberPass requires its configured payment reference.');
+    }
+    if (requestReference !== reference) {
       throw new ApiError(403, 'PAYMENT_REFERENCE_MISMATCH', 'Charge reference does not match this FiberPass rule.');
     }
   }
@@ -1306,9 +1336,13 @@ export async function createSession(input: CreateSessionInput, walletId: string)
     throw new ApiError(400, 'UNSUPPORTED_CURRENCY', 'FiberPass currently supports ' + CREATE_SESSION_POLICY.currency + ' sessions.');
   }
 
-  const verifiedApp = getVerifiedApp(input.appId);
-  if (input.appId && input.appId !== 'manual' && !verifiedApp) {
-    throw new ApiError(400, 'APP_NOT_VERIFIED', 'Selected app is not available for FiberPass sessions.');
+  const requestedAppId = cleanOptionalString(input.appId);
+  const verifiedApp = getVerifiedApp(requestedAppId);
+  const registeredApp = requestedAppId && requestedAppId !== 'manual'
+    ? await AppModel.findOne({ appId: requestedAppId, ownerWalletId: walletId, status: 'active' }).lean<AppRecord | null>()
+    : null;
+  if (requestedAppId && requestedAppId !== 'manual' && !verifiedApp && !registeredApp) {
+    throw new ApiError(403, 'APP_GRANT_NOT_ALLOWED', 'Only an active app owned by this wallet can be granted access to a FiberPass.');
   }
 
   await reconcileWalletBalanceWithCurrentVault(walletId);
@@ -1338,8 +1372,12 @@ export async function createSession(input: CreateSessionInput, walletId: string)
   const effectiveAutoMicroCharges = paymentPurpose === 'app_session' ? input.autoMicroCharges : true;
   const effectiveSingleUse = paymentPurpose === 'scheduled_release' && recipientWallets.length <= 1 ? true : paymentPurpose === 'app_session' ? input.singleUse : false;
   const publicId = newPublicId();
-  const serviceAddress = verifiedApp?.serviceAddress ?? input.serviceAddress;
-  const appPermissions = verifiedApp?.permissions ?? input.appPermissions ?? [];
+  const resolvedAppId = registeredApp?.appId ?? verifiedApp?.id ?? requestedAppId;
+  const serviceAddress = registeredApp?.serviceAddress ?? verifiedApp?.serviceAddress ?? input.serviceAddress;
+  const appPermissions = normalizeSessionAppPermissions(
+    registeredApp ? input.appPermissions : verifiedApp?.permissions ?? input.appPermissions,
+    Boolean(registeredApp)
+  );
   const platformFeeEstimateMinor = estimatePlatformFeeMinor(limitMinor);
   const networkFeeEstimateMinor = toMinorUnits(String(CREATE_SESSION_POLICY.estimatedNetworkFee), input.currency);
   const limit = fromMinorUnits(limitMinor, input.currency);
@@ -1368,12 +1406,14 @@ export async function createSession(input: CreateSessionInput, walletId: string)
     const createdSession = await SessionModel.create({
       ownerWalletId: walletId,
       publicId,
-      name: verifiedApp?.name ?? input.name,
+      name: registeredApp?.name ?? verifiedApp?.name ?? input.name,
       serviceAddress,
-      appId: verifiedApp?.id ?? input.appId,
-      appUrl: verifiedApp?.url ?? input.appUrl,
-      appTrustLevel: verifiedApp?.trustLevel ?? input.appTrustLevel,
+      appId: resolvedAppId,
+      appUrl: registeredApp?.url ?? verifiedApp?.url ?? input.appUrl,
+      appTrustLevel: registeredApp ? 'owner-approved' : verifiedApp?.trustLevel ?? input.appTrustLevel,
       appPermissions,
+      appGrantOwnerWalletId: registeredApp ? walletId : undefined,
+      appGrantCreatedAt: registeredApp ? new Date() : undefined,
       chargePolicy,
       paymentPurpose,
       recipientName,
@@ -1408,13 +1448,52 @@ export async function createSession(input: CreateSessionInput, walletId: string)
     });
 
     await sendSessionRecipientInvites(createdSession.toObject() as SessionRecord, preparedRecipients.invites);
-    await writeAuditLog({ actorWalletId: walletId, action: 'session.created', targetType: 'session', targetId: publicId, metadata: { limitMinor, appId: verifiedApp?.id ?? input.appId, paymentPurpose, releaseCadence, nextReleaseAt, recipientInviteCount: preparedRecipients.invites.length } });
+    await writeAuditLog({ actorWalletId: walletId, action: 'session.created', targetType: 'session', targetId: publicId, metadata: { limitMinor, appId: resolvedAppId, appGrantCreated: Boolean(registeredApp), paymentPurpose, releaseCadence, nextReleaseAt, recipientInviteCount: preparedRecipients.invites.length } });
     void runScheduledLiquidityPreparation({ ownerWalletId: walletId, sessionId: publicId, limit: 1 }).catch(() => undefined);
   } catch (error) {
     await WalletModel.updateOne({ walletId }, { $inc: { balanceMinor: limitMinor, balance: limit } });
     throw error;
   }
 
+  const overview = await getSessionsOverview(walletId);
+  liveEvents.publish('overview:' + walletId, overview);
+  return overview;
+}
+
+export async function grantAppAccessToSession(
+  publicId: string,
+  walletId: string,
+  input: GrantSessionAppInput
+): Promise<SessionsOverviewDto> {
+  const [session, app] = await Promise.all([
+    getSessionOrThrow(publicId, walletId),
+    AppModel.findOne({ appId: input.appId, ownerWalletId: walletId, status: 'active' })
+  ]);
+  if (!app) {
+    throw new ApiError(403, 'APP_GRANT_NOT_ALLOWED', 'Only an active app owned by this wallet can be granted access to a FiberPass.');
+  }
+  if (!OPEN_STATUSES.includes(session.status as SessionStatus)) {
+    throw new ApiError(409, 'SESSION_CLOSED', 'Only active or paused sessions can receive an app grant.');
+  }
+
+  const appPermissions = normalizeSessionAppPermissions(input.appPermissions, true);
+  session.appId = app.appId;
+  session.serviceAddress = app.serviceAddress;
+  session.appUrl = app.url;
+  session.appTrustLevel = 'owner-approved';
+  session.appPermissions = appPermissions;
+  session.appGrantOwnerWalletId = walletId;
+  session.appGrantCreatedAt = new Date();
+  prependLogs(session, newLog('App Charge Access Granted'));
+  await session.save();
+
+  await writeAuditLog({
+    actorWalletId: walletId,
+    action: 'session.app_grant.created',
+    targetType: 'session',
+    targetId: publicId,
+    metadata: { appId: app.appId, appPermissions }
+  });
   const overview = await getSessionsOverview(walletId);
   liveEvents.publish('overview:' + walletId, overview);
   return overview;
@@ -1595,6 +1674,47 @@ function normalizedAddress(value?: string): string {
   return (value ?? '').trim().toLowerCase();
 }
 
+export function assertDirectAppChargeAuthorized(session: SessionRecord, input: ChargeSessionInput): void {
+  if (input.chargeOrigin !== 'app_api_key') return;
+  if (!input.appId || !input.appOwnerWalletId) {
+    throw new ApiError(403, 'APP_AUTH_CONTEXT_REQUIRED', 'Authenticated app ownership is required to charge a FiberPass.');
+  }
+  if (session.ownerWalletId !== input.appOwnerWalletId) {
+    throw new ApiError(403, 'APP_OWNER_MISMATCH', 'An app can only charge passes owned by the same wallet.');
+  }
+  if (
+    !session.appGrantOwnerWalletId
+    || !session.appGrantCreatedAt
+    || !session.appId
+    || session.appId === 'manual'
+  ) {
+    throw new ApiError(403, 'APP_SESSION_GRANT_REQUIRED', 'The pass owner must explicitly grant this app charge access.');
+  }
+  if (session.appGrantOwnerWalletId !== input.appOwnerWalletId) {
+    throw new ApiError(403, 'APP_GRANT_OWNER_MISMATCH', 'The app grant belongs to a different wallet.');
+  }
+  if (session.appId !== input.appId) {
+    throw new ApiError(403, 'APP_SESSION_MISMATCH', 'This FiberPass is granted to a different app.');
+  }
+  if (normalizedAddress(session.serviceAddress) !== normalizedAddress(input.appServiceAddress)) {
+    throw new ApiError(403, 'APP_SERVICE_ADDRESS_MISMATCH', 'The app service address changed; the pass owner must renew the grant.');
+  }
+  if (!session.autoMicroCharges) {
+    throw new ApiError(403, 'APP_CHARGES_DISABLED', 'This FiberPass only allows owner-controlled charges.');
+  }
+  if (!normalizeSessionAppPermissions(session.appPermissions).includes('charges:create')) {
+    throw new ApiError(403, 'APP_SESSION_PERMISSION_REQUIRED', 'This FiberPass does not grant the app permission to create charges.');
+  }
+}
+
+export function assertChargePreflight(session: SessionRecord, input: ChargeSessionInput, amountMinor: number): void {
+  assertDirectAppChargeAuthorized(session, input);
+  if (session.status !== 'active') {
+    throw new ApiError(409, 'SESSION_NOT_CHARGEABLE', 'Session is ' + session.status + '; charges are blocked.');
+  }
+  assertChargeAllowedBySessionRules(session, input, amountMinor);
+}
+
 function failureFromError(error: unknown): { code: string; message: string } {
   if (error instanceof ApiError) {
     return { code: error.code, message: error.message };
@@ -1603,6 +1723,27 @@ function failureFromError(error: unknown): { code: string; message: string } {
     return { code: 'CHARGE_FAILED', message: error.message };
   }
   return { code: 'CHARGE_FAILED', message: 'Charge attempt failed.' };
+}
+
+async function writeChargeFailureAudit(input: {
+  request: ChargeSessionInput;
+  ownerWalletId: string;
+  amountMinor: number;
+  error: ApiError;
+}): Promise<void> {
+  await writeAuditLog({
+    actorWalletId: input.request.appOwnerWalletId ?? input.ownerWalletId,
+    action: input.error.statusCode < 500 ? 'charge.denied' : 'charge.failed',
+    targetType: 'session',
+    targetId: input.request.sessionId,
+    metadata: {
+      appId: input.request.appId,
+      apiKeyId: input.request.apiKeyId,
+      sessionOwnerWalletId: input.ownerWalletId,
+      amountMinor: input.amountMinor,
+      failureCode: input.error.code
+    }
+  });
 }
 
 function chargeIdempotencyKey(input: ChargeSessionInput): string | undefined {
@@ -1695,6 +1836,16 @@ export async function chargeSession(input: ChargeSessionInput): Promise<Sessions
     ...(paymentRequest ? { fiberInvoice: paymentRequest } : {})
   };
 
+  try {
+    assertChargePreflight(sessionObject as SessionRecord, { ...input, metadata: attemptMetadata }, amountMinor);
+  } catch (error) {
+    const publicError = error instanceof ApiError
+      ? error
+      : new ApiError(500, 'CHARGE_PREFLIGHT_FAILED', 'Charge authorization failed.');
+    await writeChargeFailureAudit({ request: input, ownerWalletId, amountMinor, error: publicError });
+    throw publicError;
+  }
+
   if (idempotencyKey) {
     const existingAttempt = await ChargeAttemptModel.findOne(input.appId
       ? { appId: input.appId, idempotencyKey }
@@ -1729,18 +1880,6 @@ export async function chargeSession(input: ChargeSessionInput): Promise<Sessions
   });
 
   try {
-    if (input.appId) {
-      const appIdMatches = session.appId === input.appId;
-      const serviceAddressMatches = normalizedAddress(session.serviceAddress) === normalizedAddress(input.appServiceAddress);
-      if (!appIdMatches && !serviceAddressMatches) {
-        throw new ApiError(403, 'APP_SESSION_MISMATCH', 'This app cannot charge a FiberPass owned by another app.');
-      }
-    }
-
-    if (session.status !== 'active') {
-      throw new ApiError(409, 'SESSION_NOT_CHARGEABLE', 'Session is ' + session.status + '; charges are blocked.');
-    }
-
     const expiryAt = session.expiryAt instanceof Date ? session.expiryAt : undefined;
     if (expiryAt && expiryAt.getTime() <= Date.now() && !isScheduledPayout) {
       session.status = 'expired';
@@ -1773,7 +1912,6 @@ export async function chargeSession(input: ChargeSessionInput): Promise<Sessions
       throw new ApiError(402, 'SESSION_LIMIT_EXCEEDED', 'Charge exceeds the remaining FiberPass balance.');
     }
 
-    assertChargeAllowedBySessionRules(session.toObject() as SessionRecord, { ...input, metadata: attemptMetadata }, amountMinor);
     await assertDailySessionSpendLimit(input.sessionId, amountMinor, currency);
 
     let charge: { provider: string; network: string; proofId: string; proofType: string; executionLayer: 'fiber' | 'ckb-vault'; paymentRequestHash?: string };
@@ -1895,6 +2033,7 @@ export async function chargeSession(input: ChargeSessionInput): Promise<Sessions
     attempt.failureCode = failure.code;
     attempt.failureMessage = failure.message;
     await attempt.save().catch(() => undefined);
+    await writeChargeFailureAudit({ request: input, ownerWalletId, amountMinor, error: publicError });
     throw publicError;
   }
 }
